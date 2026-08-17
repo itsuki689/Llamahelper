@@ -29,7 +29,9 @@ def qapp():
 
 @pytest.fixture()
 def fake_exe(tmp_path) -> Path:
-    """生成一个可执行的假 llama-server 启动脚本。"""
+    """生成一个可执行的假 llama-server 启动脚本（仅 POSIX：依赖 shebang）。"""
+    if sys.platform == "win32":
+        pytest.skip("假服务器启动脚本依赖 POSIX shebang，Windows 上跳过进程类测试")
     launcher = tmp_path / "fake_llama_server"
     launcher.write_text(
         f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SERVER}" "$@"\n')

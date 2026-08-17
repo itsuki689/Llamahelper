@@ -39,6 +39,8 @@ def pump_until(cond, timeout: float = 20.0) -> bool:
 
 
 def test_full_start_stop_via_mainwindow(qapp, tmp_path, monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("假服务器启动脚本依赖 POSIX shebang，Windows 上跳过")
     monkeypatch.setattr(mw, "AppConfig",
                         lambda: AppConfig(tmp_path / "cfg.json"))
     monkeypatch.setattr(mw, "PresetManager",
