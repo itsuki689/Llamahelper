@@ -53,7 +53,8 @@ def test_command_preview_updates(window):
     window.parameters.set_params(p)
     text = window.parameters.cmd_preview.toPlainText()
     assert "llama-server.exe" in text
-    assert '"D:/models/qwen moe/model.gguf"' in text  # 带空格路径有引号
+    # 带空格路径有引号（Path 在 Windows 上为反斜杠，断言做同样转换）
+    assert f'"{Path("D:/models/qwen moe/model.gguf")}"' in text
     assert "-c 32768" in text
     assert "-t 8" in text
     assert "--n-cpu-moe 48" in text

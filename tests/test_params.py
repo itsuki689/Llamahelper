@@ -1,10 +1,15 @@
 """命令构建与参数校验的单元测试。"""
+from pathlib import Path
+
 from core.params import ServerParams, split_extra_args
+
+# Path 在 Windows 上会规范化为反斜杠，断言统一经 Path 转换以跨平台
+MODEL_PATH = str(Path("D:/models/qwen moe/Qwen3-30B.gguf"))
 
 
 def make_params(**kw) -> ServerParams:
     base = dict(llama_server_path="C:/llama/llama-server.exe",
-                model_path="D:/models/qwen moe/Qwen3-30B.gguf")
+                model_path=MODEL_PATH)
     base.update(kw)
     return ServerParams(**base)
 
@@ -24,7 +29,7 @@ def test_validate(tmp_path):
 def test_build_command_basic():
     cmd = make_params().build_command()
     assert cmd[0].endswith("llama-server.exe")
-    assert cmd[1:3] == ["-m", "D:/models/qwen moe/Qwen3-30B.gguf"]
+    assert cmd[1:3] == ["-m", MODEL_PATH]
     assert "-c" in cmd and "8192" in cmd
     assert "-t" in cmd and "16" in cmd
     assert "-b" in cmd and "1024" in cmd
@@ -67,7 +72,7 @@ def test_extra_args_split():
 
 def test_command_display_quotes_paths():
     disp = make_params().command_display()
-    assert '"D:/models/qwen moe/Qwen3-30B.gguf"' in disp
+    assert f'"{MODEL_PATH}"' in disp
 
 
 def test_roundtrip_and_preset_dict():
