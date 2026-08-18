@@ -7,12 +7,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QPlainTextEdit, QProgressBar, QPushButton,
-    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame,
+    QHBoxLayout, QHeaderView, QLabel, QPlainTextEdit, QProgressBar,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
-from benchmark.runner import BenchJob, DEFAULT_TEST_PROMPT
+from benchmark.runner import SWEEP_FIELDS, BenchJob, DEFAULT_TEST_PROMPT
 from core.params import ServerParams
 from ui.theme import GRAY, GREEN, MONO_STACK, RED
 
@@ -47,20 +48,27 @@ class BenchmarkPage(QWidget):
         cl.setSpacing(10)
 
         row = QHBoxLayout()
-        self.spin_start = self._spin(0, 512, 48)
-        self.spin_end = self._spin(0, 512, 16)
-        self.spin_step = self._spin(1, 128, 8)
+        self.combo_sweep = QComboBox()
+        self.combo_sweep.addItems(list(SWEEP_FIELDS.keys()))
+        self.spin_start = self._spin(0, 1048576, 48)
+        self.spin_end = self._spin(0, 1048576, 16)
+        self.spin_step = self._spin(1, 4096, 8)
         self.spin_tokens = self._spin(16, 4096, 200)
-        for label, w in (("ncmoe 起始", self.spin_start),
-                         ("ncmoe 结束", self.spin_end),
+        self.spin_warmup = self._spin(0, 1024, 32)
+        for label, w in (("扫描参数", self.combo_sweep),
+                         ("起始", self.spin_start),
+                         ("结束", self.spin_end),
                          ("步进", self.spin_step),
-                         ("生成 token 数", self.spin_tokens)):
+                         ("生成 token 数", self.spin_tokens),
+                         ("预热 token 数", self.spin_warmup)):
             lab = QLabel(label)
             lab.setStyleSheet(f"color: {GRAY};")
             row.addWidget(lab)
             row.addWidget(w)
         row.addStretch(1)
         cl.addLayout(row)
+        # cpu-moe 基准轮只对 ncmoe 扫描有意义
+        self.combo_sweep.currentTextChanged.connect(self._on_sweep_changed)
 
         row2 = QHBoxLayout()
         self.chk_cpu_moe = QCheckBox("包含 --cpu-moe（全部 MoE 在 CPU）基准轮")
@@ -119,15 +127,23 @@ class BenchmarkPage(QWidget):
         return s
 
     # ------------------------------------------------------------------
+    def _current_sweep_field(self) -> str:
+        return SWEEP_FIELDS[self.combo_sweep.currentText()][0]
+
+    def _on_sweep_changed(self, _text: str) -> None:
+        self.chk_cpu_moe.setVisible(self._current_sweep_field() == "n_cpu_moe")
+
     def _on_run(self) -> None:
         self._results.clear()
         self.table.setRowCount(0)
         job = BenchJob(
             base_params=ServerParams(),  # 由 MainWindow 填充
-            ncmoe_start=self.spin_start.value(),
-            ncmoe_end=self.spin_end.value(),
-            ncmoe_step=self.spin_step.value(),
+            sweep_field=self._current_sweep_field(),
+            sweep_start=self.spin_start.value(),
+            sweep_end=self.spin_end.value(),
+            sweep_step=self.spin_step.value(),
             gen_tokens=self.spin_tokens.value(),
+            warmup_tokens=self.spin_warmup.value(),
             include_cpu_moe=self.chk_cpu_moe.isChecked(),
             prompt=self.prompt_edit.toPlainText().strip() or DEFAULT_TEST_PROMPT,
         )
@@ -136,8 +152,9 @@ class BenchmarkPage(QWidget):
     def set_running(self, running: bool) -> None:
         self.btn_run.setEnabled(not running)
         self.btn_stop.setEnabled(running)
-        for w in (self.spin_start, self.spin_end, self.spin_step,
-                  self.spin_tokens, self.chk_cpu_moe, self.prompt_edit):
+        for w in (self.combo_sweep, self.spin_start, self.spin_end,
+                  self.spin_step, self.spin_tokens, self.spin_warmup,
+                  self.chk_cpu_moe, self.prompt_edit):
             w.setEnabled(not running)
         if running:
             self.progress_label.setText("准备中…")
@@ -208,11 +225,11 @@ class BenchmarkPage(QWidget):
             return
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["label", "ncmoe", "cpu_moe", "gen_tps",
+            writer.writerow(["label", "field", "value", "gen_tps",
                              "prompt_tps", "vram_peak_mb", "power_peak_w",
                              "ram_peak_mb", "status", "error"])
             for r in self._results:
-                writer.writerow([r["label"], r["ncmoe"], r["cpu_moe"],
+                writer.writerow([r["label"], r["field"], r["value"],
                                  f"{r['gen_tps']:.2f}", f"{r['prompt_tps']:.2f}",
                                  f"{r['vram_peak_mb']:.0f}",
                                  f"{r['power_peak_w']:.0f}",

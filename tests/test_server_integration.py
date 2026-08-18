@@ -127,23 +127,42 @@ def test_start_with_occupied_port_fails(qapp, fake_exe):
 
 # ---------------------------------------------------------------------
 def test_build_config_list():
-    job = BenchJob(base_params=ServerParams(), ncmoe_start=48, ncmoe_end=16,
-                   ncmoe_step=8, include_cpu_moe=True)
+    job = BenchJob(base_params=ServerParams(), sweep_field="n_cpu_moe",
+                   sweep_start=48, sweep_end=16, sweep_step=8,
+                   include_cpu_moe=True)
     labels = [c["label"] for c in build_config_list(job)]
-    assert labels == ["cpu-moe (全部MoE在CPU)", "ncmoe 48", "ncmoe 40",
-                      "ncmoe 32", "ncmoe 24", "ncmoe 16"]
-    job2 = BenchJob(base_params=ServerParams(), ncmoe_start=8, ncmoe_end=32,
-                    ncmoe_step=8, include_cpu_moe=False)
+    assert labels == ["cpu-moe (全部MoE在CPU)", "n_cpu_moe=48", "n_cpu_moe=40",
+                      "n_cpu_moe=32", "n_cpu_moe=24", "n_cpu_moe=16"]
+    job2 = BenchJob(base_params=ServerParams(), sweep_field="n_cpu_moe",
+                    sweep_start=8, sweep_end=32, sweep_step=8,
+                    include_cpu_moe=False)
     assert [c["overrides"]["n_cpu_moe"] for c in build_config_list(job2)] == \
         [8, 16, 24, 32]
+
+
+def test_build_config_list_other_fields():
+    job = BenchJob(base_params=ServerParams(), sweep_field="gpu_layers",
+                   sweep_start=40, sweep_end=20, sweep_step=10,
+                   include_cpu_moe=False)
+    cfgs = build_config_list(job)
+    assert [c["overrides"]["gpu_layers"] for c in cfgs] == [40, 30, 20]
+    assert all(c["overrides"]["gpu_layers_auto"] is False for c in cfgs)
+    # 未知字段报错
+    bad = BenchJob(base_params=ServerParams(), sweep_field="nope")
+    try:
+        build_config_list(bad)
+        assert False, "应抛出 ValueError"
+    except ValueError:
+        pass
 
 
 def test_benchmark_one_round(fake_exe):
     port = free_port()
     job = BenchJob(
         base_params=make_params(fake_exe, port),
-        ncmoe_start=32, ncmoe_end=32, ncmoe_step=8,
-        gen_tokens=32, include_cpu_moe=False,
+        sweep_field="n_cpu_moe",
+        sweep_start=32, sweep_end=32, sweep_step=8,
+        gen_tokens=32, warmup_tokens=8, include_cpu_moe=False,
         prompt="Write a long story about robots. " * 20,
         health_timeout=30.0,
     )
@@ -156,6 +175,7 @@ def test_benchmark_one_round(fake_exe):
     r = results[0]
     assert r["ok"], f"benchmark 失败: {r['error']}"
     assert r["gen_tps"] > 0 and r["prompt_tps"] > 0
-    assert r["label"] == "ncmoe 32"
+    assert r["label"] == "n_cpu_moe=32"
+    assert r["field"] == "n_cpu_moe" and r["value"] == 32
     # 进程已关闭、端口已释放
     assert not port_in_use("127.0.0.1", port)

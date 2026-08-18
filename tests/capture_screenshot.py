@@ -57,6 +57,8 @@ def grab_all() -> None:
     for i, name in enumerate(["dashboard", "parameters", "benchmark",
                               "logs", "presets"]):
         win._switch_page(i)
+        if name == "parameters":
+            win.parameters.btn_advanced.setChecked(True)  # 展开高级参数
         app.processEvents()
         win.grab().save(str(out_dir / f"ui_{name}.png"))
     app.quit()

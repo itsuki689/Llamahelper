@@ -5,12 +5,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
     QVBoxLayout, QWidget,
 )
 
-from core.params import KV_CACHE_TYPES, ServerParams
+from core.params import KV_CACHE_TYPES, ROPE_SCALING_TYPES, ServerParams
 from ui.theme import MONO_STACK
 from ui.widgets import DragDropLineEdit
 
@@ -129,7 +129,77 @@ class ParametersPage(QWidget):
         moe_row.addWidget(self.chk_cpu_moe)
         moe_row.addWidget(self.spin_ncmoe, 1)
         tc.addLayout(moe_row)
+
+        mtp_row = QHBoxLayout()
+        mtp_lab = QLabel("MTP 投机解码")
+        mtp_lab.setFixedWidth(180)
+        mtp_lab.setStyleSheet("color: #98989D;")
+        self.chk_mtp = QCheckBox("启用 MTP (--spec-type draft-mtp)")
+        self.spin_draft = self._spin(1, 16, 3, 1)
+        self.spin_draft.setPrefix("draft n-max ")
+        self.spin_draft.setEnabled(False)
+        self.chk_mtp.toggled.connect(self.spin_draft.setEnabled)
+        mtp_row.addWidget(mtp_lab)
+        mtp_row.addWidget(self.chk_mtp)
+        mtp_row.addWidget(self.spin_draft, 1)
+        tc.addLayout(mtp_row)
         form.addWidget(tune)
+
+        # ---- 高级参数（默认折叠） ----
+        self.btn_advanced = QPushButton("高级参数 ▾")
+        self.btn_advanced.setCheckable(True)
+        self.btn_advanced.setChecked(False)
+        form.addWidget(self.btn_advanced)
+
+        self.adv_card = QFrame()
+        self.adv_card.setObjectName("card")
+        ac = QVBoxLayout(self.adv_card)
+        ac.setContentsMargins(16, 14, 16, 14)
+        ac.setSpacing(10)
+
+        self.spin_ubatch = self._spin_d(0, 32768, 0, 16, "默认")
+        self.spin_tb = self._spin_d(0, 64, 0, 1, "默认")
+        self.spin_parallel = self._spin_d(0, 64, 0, 1, "auto")
+        self.spin_cache_reuse = self._spin_d(0, 8192, 0, 16, "关闭")
+        ac.addLayout(self._row("ubatch Size (-ub)", self.spin_ubatch))
+        ac.addLayout(self._row("Threads Batch (-tb)", self.spin_tb))
+        ac.addLayout(self._row("Parallel Slots (-np)", self.spin_parallel))
+        ac.addLayout(self._row("Cache Reuse", self.spin_cache_reuse))
+
+        self.chk_cont_batch = QCheckBox("启用 Continuous Batching（连续批处理）")
+        self.chk_cont_batch.setChecked(True)
+        ac.addWidget(self.chk_cont_batch)
+        flags_row = QHBoxLayout()
+        self.chk_no_mmap = QCheckBox("--no-mmap")
+        self.chk_mlock = QCheckBox("--mlock")
+        self.chk_no_warmup = QCheckBox("--no-warmup")
+        for c in (self.chk_no_mmap, self.chk_mlock, self.chk_no_warmup):
+            flags_row.addWidget(c)
+        flags_row.addStretch(1)
+        ac.addLayout(flags_row)
+
+        self.combo_rope = QComboBox()
+        self.combo_rope.addItems(ROPE_SCALING_TYPES)
+        self.spin_rope_scale = QDoubleSpinBox()
+        self.spin_rope_scale.setRange(0.0, 16.0)
+        self.spin_rope_scale.setSingleStep(0.25)
+        self.spin_rope_scale.setSpecialValueText("默认")
+        ac.addLayout(self._row("RoPE Scaling", self.combo_rope))
+        ac.addLayout(self._row("RoPE Freq Scale", self.spin_rope_scale))
+
+        self.spin_temp = self._dsample(2.0)
+        self.spin_top_k = self._spin_d(-1, 200, -1, 1, "默认")
+        self.spin_top_p = self._dsample(1.0)
+        self.spin_min_p = self._dsample(1.0)
+        ac.addLayout(self._row("默认 Temperature", self.spin_temp))
+        ac.addLayout(self._row("默认 Top-K", self.spin_top_k))
+        ac.addLayout(self._row("默认 Top-P", self.spin_top_p))
+        ac.addLayout(self._row("默认 Min-P", self.spin_min_p))
+        self.adv_card.setVisible(False)
+        self.btn_advanced.toggled.connect(self.adv_card.setVisible)
+        self.btn_advanced.toggled.connect(
+            lambda on: self.btn_advanced.setText("高级参数 ▴" if on else "高级参数 ▾"))
+        form.addWidget(self.adv_card)
 
         # ---- 服务参数卡片 ----
         srv = QFrame()
@@ -178,11 +248,17 @@ class ParametersPage(QWidget):
                   self.edit_alias, self.edit_extra):
             w.textChanged.connect(self._on_change)
         for w in (self.spin_ctx, self.spin_threads, self.spin_batch,
-                  self.spin_ngl, self.spin_ncmoe, self.spin_port):
+                  self.spin_ngl, self.spin_ncmoe, self.spin_port,
+                  self.spin_draft, self.spin_ubatch, self.spin_tb,
+                  self.spin_parallel, self.spin_cache_reuse,
+                  self.spin_rope_scale, self.spin_temp, self.spin_top_k,
+                  self.spin_top_p, self.spin_min_p):
             w.valueChanged.connect(self._on_change)
-        for w in (self.chk_ngl_auto, self.chk_fa, self.chk_cpu_moe):
+        for w in (self.chk_ngl_auto, self.chk_fa, self.chk_cpu_moe,
+                  self.chk_mtp, self.chk_cont_batch, self.chk_no_mmap,
+                  self.chk_mlock, self.chk_no_warmup):
             w.toggled.connect(self._on_change)
-        for w in (self.combo_k, self.combo_v):
+        for w in (self.combo_k, self.combo_v, self.combo_rope):
             w.currentTextChanged.connect(self._on_change)
         self._on_change()
 
@@ -193,6 +269,25 @@ class ParametersPage(QWidget):
         s.setRange(lo, hi)
         s.setValue(val)
         s.setSingleStep(step)
+        return s
+
+    @staticmethod
+    def _spin_d(lo: int, hi: int, val: int, step: int,
+                special: str) -> QSpinBox:
+        """带 specialValueText 的整数 spin（最小值显示为 special，如“默认”）。"""
+        s = ParametersPage._spin(lo, hi, val, step)
+        s.setSpecialValueText(special)
+        return s
+
+    @staticmethod
+    def _dsample(hi: float) -> QDoubleSpinBox:
+        """采样参数 double spin：-1 显示为“默认”（不传递给 llama-server）。"""
+        s = QDoubleSpinBox()
+        s.setRange(-1.0, hi)
+        s.setValue(-1.0)
+        s.setSingleStep(0.05)
+        s.setDecimals(2)
+        s.setSpecialValueText("默认")
         return s
 
     @staticmethod
@@ -220,9 +315,25 @@ class ParametersPage(QWidget):
             cache_type_v=self.combo_v.currentText(),
             cpu_moe=self.chk_cpu_moe.isChecked(),
             n_cpu_moe=self.spin_ncmoe.value(),
+            spec_mtp=self.chk_mtp.isChecked(),
+            spec_draft_n_max=self.spin_draft.value(),
             host=self.edit_host.text().strip() or "127.0.0.1",
             port=self.spin_port.value(),
             alias=self.edit_alias.text().strip(),
+            ubatch_size=self.spin_ubatch.value(),
+            threads_batch=self.spin_tb.value(),
+            parallel=self.spin_parallel.value(),
+            cont_batching=self.chk_cont_batch.isChecked(),
+            no_mmap=self.chk_no_mmap.isChecked(),
+            mlock=self.chk_mlock.isChecked(),
+            no_warmup=self.chk_no_warmup.isChecked(),
+            cache_reuse=self.spin_cache_reuse.value(),
+            rope_scaling=self.combo_rope.currentText(),
+            rope_freq_scale=self.spin_rope_scale.value(),
+            temp=self.spin_temp.value(),
+            top_k=self.spin_top_k.value(),
+            top_p=self.spin_top_p.value(),
+            min_p=self.spin_min_p.value(),
             extra_args=self.edit_extra.text(),
         )
 
@@ -243,6 +354,23 @@ class ParametersPage(QWidget):
             self.chk_cpu_moe.setChecked(p.cpu_moe)
             self.spin_ncmoe.setValue(p.n_cpu_moe)
             self.spin_ncmoe.setEnabled(not p.cpu_moe)
+            self.chk_mtp.setChecked(p.spec_mtp)
+            self.spin_draft.setValue(p.spec_draft_n_max)
+            self.spin_draft.setEnabled(p.spec_mtp)
+            self.spin_ubatch.setValue(p.ubatch_size)
+            self.spin_tb.setValue(p.threads_batch)
+            self.spin_parallel.setValue(p.parallel)
+            self.chk_cont_batch.setChecked(p.cont_batching)
+            self.chk_no_mmap.setChecked(p.no_mmap)
+            self.chk_mlock.setChecked(p.mlock)
+            self.chk_no_warmup.setChecked(p.no_warmup)
+            self.spin_cache_reuse.setValue(p.cache_reuse)
+            self.combo_rope.setCurrentText(p.rope_scaling)
+            self.spin_rope_scale.setValue(p.rope_freq_scale)
+            self.spin_temp.setValue(p.temp)
+            self.spin_top_k.setValue(p.top_k)
+            self.spin_top_p.setValue(p.top_p)
+            self.spin_min_p.setValue(p.min_p)
             self.edit_host.setText(p.host)
             self.spin_port.setValue(p.port)
             self.edit_alias.setText(p.alias)

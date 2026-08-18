@@ -59,7 +59,7 @@ def test_command_preview_updates(window):
     assert "-t 8" in text
     assert "--n-cpu-moe 48" in text
     assert "--cache-type-k q8_0" in text
-    assert "-ngl 999" in text  # Auto
+    assert "-ngl auto" in text  # GPU Layers Auto
 
 
 def test_params_roundtrip_and_config_saved(window, tmp_path):
@@ -120,4 +120,33 @@ def test_benchmark_controls(window, monkeypatch):
     window.benchmark.run_requested.connect(captured.append)
     window.benchmark._on_run()
     job = captured[0]
-    assert job.ncmoe_start == 48 and job.ncmoe_end == 16 and job.ncmoe_step == 8
+    assert job.sweep_field == "n_cpu_moe"
+    assert job.sweep_start == 48 and job.sweep_end == 16
+    assert job.sweep_step == 8
+    assert job.warmup_tokens == 32
+    # 切换到非 ncmoe 扫描目标时，cpu-moe 复选框隐藏
+    window.benchmark.combo_sweep.setCurrentText("GPU Layers")
+    assert not window.benchmark.chk_cpu_moe.isVisible()
+
+
+def test_advanced_params_in_gui(window):
+    p = ServerParams(
+        llama_server_path="C:/llama/llama-server.exe",
+        model_path="D:/m.gguf",
+        spec_mtp=True, spec_draft_n_max=4,
+        ubatch_size=512, parallel=2, cont_batching=False,
+        rope_scaling="yarn", temp=0.6,
+    )
+    window.parameters.set_params(p)
+    text = window.parameters.cmd_preview.toPlainText()
+    assert "--spec-type draft-mtp" in text
+    assert "--spec-draft-n-max 4" in text
+    assert "-ub 512" in text
+    assert "-np 2" in text
+    assert "--no-cont-batching" in text
+    assert "--rope-scaling yarn" in text
+    assert "--temp 0.6" in text
+    # 往返一致
+    got = window.parameters.get_params()
+    assert got.spec_mtp and got.spec_draft_n_max == 4
+    assert got.ubatch_size == 512 and got.temp == 0.6

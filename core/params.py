@@ -9,8 +9,11 @@ from pathlib import Path
 # KV cache 可选类型（llama.cpp 支持值）
 KV_CACHE_TYPES = ["f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"]
 
-# GPU Layers 为 Auto 时传给 -ngl 的值（足够大即全部 offload）
-GPU_LAYERS_AUTO_VALUE = 999
+# GPU Layers 为 Auto 时传给 -ngl 的值（llama.cpp 原生支持 auto：按显存自动决定）
+GPU_LAYERS_AUTO_VALUE = "auto"
+
+# RoPE 缩放方式（none = 不传递该参数）
+ROPE_SCALING_TYPES = ["none", "linear", "yarn"]
 
 
 def split_extra_args(text: str) -> list[str]:
@@ -51,9 +54,29 @@ class ServerParams:
     cpu_moe: bool = False        # --cpu-moe：全部 MoE 权重放 CPU
     n_cpu_moe: int = 0           # --n-cpu-moe N：前 N 层 MoE 放 CPU（0 = 不启用）
 
+    # MTP 投机解码（模型需内置 MTP 层，如 Qwen3-Next / Qwen3.5 系列）
+    spec_mtp: bool = False       # --spec-type draft-mtp
+    spec_draft_n_max: int = 3    # --spec-draft-n-max N（MTP 开启时生效）
+
     host: str = "127.0.0.1"
     port: int = 8080
     alias: str = ""
+
+    # ---------------- 高级参数（默认值 = 不传递，由 llama-server 决定） --------
+    ubatch_size: int = 0         # -ub N
+    threads_batch: int = 0       # -tb N
+    parallel: int = 0            # -np N（0 = auto，不传）
+    cont_batching: bool = True   # False → --no-cont-batching
+    no_mmap: bool = False        # --no-mmap
+    mlock: bool = False          # --mlock
+    no_warmup: bool = False      # --no-warmup
+    cache_reuse: int = 0         # --cache-reuse N
+    rope_scaling: str = "none"   # --rope-scaling（none = 不传）
+    rope_freq_scale: float = 0.0  # --rope-freq-scale（0 = 不传）
+    temp: float = -1.0           # --temp（-1 = 不传，下同）
+    top_k: int = -1              # --top-k
+    top_p: float = -1.0          # --top-p
+    min_p: float = -1.0          # --min-p
 
     extra_args: str = ""
 
@@ -65,7 +88,7 @@ class ServerParams:
         cmd += ["-c", str(self.context_size)]
         cmd += ["-t", str(self.threads)]
         cmd += ["-b", str(self.batch_size)]
-        cmd += ["-ngl", str(GPU_LAYERS_AUTO_VALUE if self.gpu_layers_auto else self.gpu_layers)]
+        cmd += ["-ngl", GPU_LAYERS_AUTO_VALUE if self.gpu_layers_auto else str(self.gpu_layers)]
         # b10453 等新版本 --flash-attn 需要取值 auto|on|off
         cmd += ["--flash-attn", "on" if self.flash_attention else "off"]
         cmd += ["--cache-type-k", self.cache_type_k]
@@ -74,12 +97,49 @@ class ServerParams:
             cmd += ["--cpu-moe"]
         elif self.n_cpu_moe > 0:
             cmd += ["--n-cpu-moe", str(self.n_cpu_moe)]
+        if self.spec_mtp:
+            cmd += ["--spec-type", "draft-mtp"]
+            cmd += ["--spec-draft-n-max", str(self.spec_draft_n_max)]
         cmd += ["--host", self.host]
         cmd += ["--port", str(self.port)]
         if self.alias.strip():
             cmd += ["--alias", self.alias.strip()]
+        cmd += self._advanced_args()
         cmd += split_extra_args(self.extra_args)
         return cmd
+
+    def _advanced_args(self) -> list[str]:
+        """高级参数：仅在与默认值不同时生成，保持命令干净。"""
+        args: list[str] = []
+        if self.ubatch_size > 0:
+            args += ["-ub", str(self.ubatch_size)]
+        if self.threads_batch > 0:
+            args += ["-tb", str(self.threads_batch)]
+        if self.parallel > 0:
+            args += ["-np", str(self.parallel)]
+        if not self.cont_batching:
+            args += ["--no-cont-batching"]
+        if self.no_mmap:
+            args += ["--no-mmap"]
+        if self.mlock:
+            args += ["--mlock"]
+        if self.no_warmup:
+            args += ["--no-warmup"]
+        if self.cache_reuse > 0:
+            args += ["--cache-reuse", str(self.cache_reuse)]
+        if self.rope_scaling != "none":
+            args += ["--rope-scaling", self.rope_scaling]
+        if self.rope_freq_scale > 0:
+            args += ["--rope-freq-scale", f"{self.rope_freq_scale:g}"]
+        if self.temp >= 0:
+            args += ["--temp", f"{self.temp:g}"]
+        if self.top_k >= 0:
+            args += ["--top-k", str(self.top_k)]
+        if self.top_p >= 0:
+            args += ["--top-p", f"{self.top_p:g}"]
+        if self.min_p >= 0:
+            args += ["--min-p", f"{self.min_p:g}"]
+        return args
 
     def command_display(self) -> str:
         """用于界面展示的命令字符串（含必要引号）。"""
@@ -115,6 +175,8 @@ class ServerParams:
             errors.append(f"非法 KV Cache K 类型: {self.cache_type_k}")
         if self.cache_type_v not in KV_CACHE_TYPES:
             errors.append(f"非法 KV Cache V 类型: {self.cache_type_v}")
+        if self.rope_scaling not in ROPE_SCALING_TYPES:
+            errors.append(f"非法 RoPE 缩放类型: {self.rope_scaling}")
         return errors
 
     # ------------------------------------------------------------------

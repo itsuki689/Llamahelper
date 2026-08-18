@@ -39,33 +39,52 @@ DEFAULT_TEST_PROMPT = (
 @dataclass
 class BenchJob:
     base_params: ServerParams
-    ncmoe_start: int = 48
-    ncmoe_end: int = 16
-    ncmoe_step: int = 8
+    sweep_field: str = "n_cpu_moe"   # 扫描目标（见 SWEEP_FIELDS）
+    sweep_start: int = 48
+    sweep_end: int = 16
+    sweep_step: int = 8
     gen_tokens: int = 200
-    include_cpu_moe: bool = True
+    warmup_tokens: int = 32          # 正式测量前的预热 token 数
+    include_cpu_moe: bool = True     # 仅扫描 ncmoe 时有效：加测 --cpu-moe 基准轮
     prompt: str = DEFAULT_TEST_PROMPT
     health_timeout: float = 180.0
 
 
+# 可扫描的参数：显示名 → (ServerParams 字段, 额外覆盖)
+SWEEP_FIELDS: dict[str, tuple[str, dict]] = {
+    "n-cpu-moe":      ("n_cpu_moe", {"cpu_moe": False}),
+    "GPU Layers":     ("gpu_layers", {"gpu_layers_auto": False}),
+    "Batch Size":     ("batch_size", {}),
+    "ubatch Size":    ("ubatch_size", {}),
+    "Threads":        ("threads", {}),
+    "Context Size":   ("context_size", {}),
+    "MTP draft n-max": ("spec_draft_n_max", {"spec_mtp": True}),
+}
+
+
 def build_config_list(job: BenchJob) -> list[dict]:
     """生成待测配置列表：[{"label":..., "overrides":{...}}, ...]"""
+    if job.sweep_field not in {f for f, _ in SWEEP_FIELDS.values()}:
+        raise ValueError(f"未知扫描参数: {job.sweep_field}")
     configs: list[dict] = []
-    if job.include_cpu_moe:
+    if job.sweep_field == "n_cpu_moe" and job.include_cpu_moe:
         configs.append({"label": "cpu-moe (全部MoE在CPU)",
                         "overrides": {"cpu_moe": True, "n_cpu_moe": 0}})
-    step = max(1, abs(job.ncmoe_step))
-    v = job.ncmoe_start
-    if job.ncmoe_start >= job.ncmoe_end:
-        while v >= job.ncmoe_end:
-            configs.append({"label": f"ncmoe {v}",
-                            "overrides": {"cpu_moe": False, "n_cpu_moe": v}})
+    field, extra = next((f, e) for f, e in SWEEP_FIELDS.values()
+                        if f == job.sweep_field)
+    step = max(1, abs(job.sweep_step))
+    v = job.sweep_start
+    while True:
+        configs.append({"label": f"{field}={v}",
+                        "overrides": {**extra, field: v}})
+        if job.sweep_start >= job.sweep_end:
             v -= step
-    else:
-        while v <= job.ncmoe_end:
-            configs.append({"label": f"ncmoe {v}",
-                            "overrides": {"cpu_moe": False, "n_cpu_moe": v}})
+            if v < job.sweep_end:
+                break
+        else:
             v += step
+            if v > job.sweep_end:
+                break
     return configs
 
 
@@ -105,7 +124,9 @@ class BenchmarkRunner(QThread):
     def _run_one(self, label: str, overrides: dict) -> dict:
         params = replace(self.job.base_params, **overrides)
         result = {
-            "label": label, "ncmoe": overrides.get("n_cpu_moe", 0),
+            "label": label,
+            "field": self.job.sweep_field,
+            "value": overrides.get(self.job.sweep_field, ""),
             "cpu_moe": overrides.get("cpu_moe", False),
             "gen_tps": 0.0, "prompt_tps": 0.0,
             "vram_peak_mb": 0.0, "power_peak_w": 0.0, "ram_peak_mb": 0.0,
@@ -135,6 +156,8 @@ class BenchmarkRunner(QThread):
         try:
             ready = self._wait_ready(proc, params, result)
             if ready and not self._stop_requested:
+                self._warmup(params)
+                self._sample_peaks(proc, result)
                 self._measure(proc, params, result)
             elif self._stop_requested:
                 result["status"] = "中止"
@@ -199,26 +222,43 @@ class BenchmarkRunner(QThread):
         result["error"] = f"等待 API 就绪超时 ({self.job.health_timeout:.0f}s)"
         return False
 
-    def _measure(self, proc: subprocess.Popen, params: ServerParams,
-                 result: dict) -> None:
+    def _post_completion(self, params: ServerParams, n_predict: int,
+                         timeout: float) -> dict:
+        """发送一次 /completion 请求，返回响应 JSON。"""
         url = f"http://{params.host}:{params.port}/completion"
         payload = json.dumps({
             "prompt": self.job.prompt,
-            "n_predict": self.job.gen_tokens,
+            "n_predict": n_predict,
             "temperature": 0.0,
             "stream": False,
             "cache_prompt": False,
         }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
+    def _warmup(self, params: ServerParams) -> None:
+        """正式测量前的预热请求（结果不计入），失败仅记日志不中断。"""
+        if self.job.warmup_tokens <= 0:
+            return
+        self.sig_log.emit(f"[bench] 预热 {self.job.warmup_tokens} tokens …")
+        try:
+            self._post_completion(params, self.job.warmup_tokens,
+                                  timeout=max(60.0, self.job.warmup_tokens * 2.0))
+            self.sig_log.emit("[bench] 预热完成，开始正式测量")
+        except Exception as e:
+            self.sig_log.emit(f"[bench] 预热请求失败（继续测量）: {e}")
+
+    def _measure(self, proc: subprocess.Popen, params: ServerParams,
+                 result: dict) -> None:
         holder: dict = {}
 
         def do_request() -> None:
-            req = urllib.request.Request(url, data=payload,
-                                         headers={"Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=max(
-                        120.0, self.job.gen_tokens * 2.0)) as resp:
-                    holder["data"] = json.loads(resp.read().decode("utf-8"))
+                holder["data"] = self._post_completion(
+                    params, self.job.gen_tokens,
+                    timeout=max(120.0, self.job.gen_tokens * 2.0))
             except Exception as e:  # 网络/JSON 错误统一记录
                 holder["error"] = str(e)
 
