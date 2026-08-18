@@ -74,6 +74,16 @@ class ParametersPage(QWidget):
         row2.addWidget(self.model_edit, 1)
         row2.addWidget(btn_model)
         pc.addLayout(row2)
+
+        self.mmproj_edit = DragDropLineEdit(".gguf")
+        self.mmproj_edit.setPlaceholderText("可选，视觉/多模态模型的 mmproj 文件")
+        btn_mmproj = QPushButton("浏览…")
+        btn_mmproj.clicked.connect(self._browse_mmproj)
+        pc.addWidget(QLabel("mmproj 投影文件（-mm，可选）"))
+        row3 = QHBoxLayout()
+        row3.addWidget(self.mmproj_edit, 1)
+        row3.addWidget(btn_mmproj)
+        pc.addLayout(row3)
         form.addWidget(path_card)
 
         # ---- 推理参数卡片 ----
@@ -244,8 +254,8 @@ class ParametersPage(QWidget):
         outer.addWidget(scroll, 1)
 
         # 所有控件变化 → 刷新预览（防抖发信号）
-        for w in (self.exe_edit, self.model_edit, self.edit_host,
-                  self.edit_alias, self.edit_extra):
+        for w in (self.exe_edit, self.model_edit, self.mmproj_edit,
+                  self.edit_host, self.edit_alias, self.edit_extra):
             w.textChanged.connect(self._on_change)
         for w in (self.spin_ctx, self.spin_threads, self.spin_batch,
                   self.spin_ngl, self.spin_ncmoe, self.spin_port,
@@ -306,6 +316,7 @@ class ParametersPage(QWidget):
         return ServerParams(
             llama_server_path=self.exe_edit.text().strip(),
             model_path=self.model_edit.text().strip(),
+            mmproj_path=self.mmproj_edit.text().strip(),
             context_size=self.spin_ctx.value(),
             threads=self.spin_threads.value(),
             batch_size=self.spin_batch.value(),
@@ -343,6 +354,7 @@ class ParametersPage(QWidget):
         try:
             self.exe_edit.setText(p.llama_server_path)
             self.model_edit.setText(p.model_path)
+            self.mmproj_edit.setText(p.mmproj_path)
             self.spin_ctx.setValue(p.context_size)
             self.spin_threads.setValue(p.threads)
             self.spin_batch.setValue(p.batch_size)
@@ -408,6 +420,12 @@ class ParametersPage(QWidget):
             self, "选择 GGUF 模型", "", "GGUF 模型 (*.gguf);;所有文件 (*)")
         if path:
             self.model_edit.setText(str(Path(path)))
+
+    def _browse_mmproj(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 mmproj 投影文件", "", "mmproj (*.gguf);;所有文件 (*)")
+        if path:
+            self.mmproj_edit.setText(str(Path(path)))
 
     def _copy_command(self) -> None:
         from PySide6.QtWidgets import QApplication

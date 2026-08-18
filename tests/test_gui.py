@@ -156,12 +156,14 @@ def test_advanced_params_in_gui(window):
     p = ServerParams(
         llama_server_path="C:/llama/llama-server.exe",
         model_path="D:/m.gguf",
+        mmproj_path="D:/mmproj.gguf",
         spec_mtp=True, spec_draft_n_max=4,
         ubatch_size=512, parallel=2, cont_batching=False,
         rope_scaling="yarn", temp=0.6,
     )
     window.parameters.set_params(p)
     text = window.parameters.cmd_preview.toPlainText()
+    assert f"-mm {Path('D:/mmproj.gguf')}" in text
     assert "--spec-type draft-mtp" in text
     assert "--spec-draft-n-max 4" in text
     assert "-ub 512" in text

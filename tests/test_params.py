@@ -102,6 +102,25 @@ def test_build_command_advanced_on():
     assert cmd[cmd.index("--min-p") + 1] == "0.05"
 
 
+def test_build_command_mmproj(tmp_path):
+    # 未设置时不出现 -mm
+    assert "-mm" not in make_params().build_command()
+    mm = tmp_path / "mmproj.gguf"
+    mm.write_text("x")
+    cmd = make_params(mmproj_path=str(mm)).build_command()
+    assert cmd[cmd.index("-mm") + 1] == str(mm)
+    # 校验：路径不存在时报错
+    assert any("mmproj" in e for e in
+               make_params(mmproj_path="D:/nope.gguf").validate())
+
+
+def test_preset_excludes_paths():
+    d = make_params(mmproj_path="D:/mm.gguf").preset_dict()
+    assert "llama_server_path" not in d
+    assert "model_path" not in d
+    assert "mmproj_path" not in d
+
+
 def test_extra_args_split():
     cmd = make_params(extra_args="--ubatch-size 512 --no-warmup").build_command()
     assert cmd[-3:] == ["--ubatch-size", "512", "--no-warmup"]

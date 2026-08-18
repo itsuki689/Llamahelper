@@ -39,6 +39,7 @@ class ServerParams:
 
     llama_server_path: str = ""
     model_path: str = ""
+    mmproj_path: str = ""        # -mm：多模态投影文件（可选，视觉模型用）
 
     context_size: int = 8192
     threads: int = 16
@@ -85,6 +86,8 @@ class ServerParams:
         """生成 QProcess/Popen 用的参数列表（不使用 shell，路径可含空格）。"""
         cmd: list[str] = [str(Path(self.llama_server_path))]
         cmd += ["-m", str(Path(self.model_path))]
+        if self.mmproj_path.strip():
+            cmd += ["-mm", str(Path(self.mmproj_path))]
         cmd += ["-c", str(self.context_size)]
         cmd += ["-t", str(self.threads)]
         cmd += ["-b", str(self.batch_size)]
@@ -167,6 +170,10 @@ class ServerParams:
         model = Path(self.model_path) if self.model_path else None
         if not model or not model.is_file():
             errors.append("未选择有效的 GGUF 模型文件")
+        if self.mmproj_path.strip():
+            mm = Path(self.mmproj_path)
+            if not mm.is_file():
+                errors.append("mmproj 文件不存在")
         if not self.host.strip():
             errors.append("Host 不能为空")
         if not (1 <= self.port <= 65535):
@@ -190,8 +197,9 @@ class ServerParams:
         return cls(**filtered)
 
     def preset_dict(self) -> dict:
-        """预设只保存调参字段，不含 exe / 模型路径。"""
+        """预设只保存调参字段，不含 exe / 模型 / mmproj 路径。"""
         d = self.to_dict()
         d.pop("llama_server_path", None)
         d.pop("model_path", None)
+        d.pop("mmproj_path", None)
         return d
