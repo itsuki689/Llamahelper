@@ -158,7 +158,7 @@ class ParametersPage(QWidget):
         form.addWidget(tune)
 
         # ---- 高级参数（默认折叠） ----
-        self.btn_advanced = QPushButton("高级参数 ▾")
+        self.btn_advanced = QPushButton("高级参数")
         self.btn_advanced.setCheckable(True)
         self.btn_advanced.setChecked(False)
         form.addWidget(self.btn_advanced)
@@ -207,8 +207,6 @@ class ParametersPage(QWidget):
         ac.addLayout(self._row("默认 Min-P", self.spin_min_p))
         self.adv_card.setVisible(False)
         self.btn_advanced.toggled.connect(self.adv_card.setVisible)
-        self.btn_advanced.toggled.connect(
-            lambda on: self.btn_advanced.setText("高级参数 ▴" if on else "高级参数 ▾"))
         form.addWidget(self.adv_card)
 
         # ---- 服务参数卡片 ----
