@@ -10,17 +10,18 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
 - **Dashboard**：GPU 利用率 / 显存 / 温度 / 功耗 / 频率，CPU / RAM，llama-server 进程
   CPU / RAM，Generation 与 Prompt tok/s 大数字实时展示；启动 / 停止 / 重启、
   打开 WebUI、复制 API URL、PID 显示、防重复启动、端口占用检测。
-- **Parameters**：Context Size、Threads、Batch Size、GPU Layers（Auto 使用
-  llama.cpp 原生 `-ngl auto`）、Flash Attention 开关、KV Cache K/V 类型、
-  `--cpu-moe` 与 `ncmoe`、MTP 投机解码（`--spec-type draft-mtp` +
-  `--spec-draft-n-max`）、Host / Port / Alias、额外自定义参数；高级模式
-  （折叠面板）提供 ubatch-size、threads-batch、parallel、continuous
-  batching、no-mmap、mlock、no-warmup、cache-reuse、RoPE scaling /
-  freq-scale、temp / top-k / top-p / min-p 默认采样参数；下方实时显示
-  最终生成的完整命令；GGUF 文件支持拖放；路径与参数自动记忆
+- **Parameters**：Context Size、Threads、Threads Batch（-tb）、Batch Size、
+  GPU Layers（Auto 使用 llama.cpp 原生 `-ngl auto`）、Flash Attention 开关、
+  KV Cache K/V 类型、`--cpu-moe` 与 `ncmoe`、MTP 投机解码
+  （`--spec-type draft-mtp` + `--spec-draft-n-max`）、Host / Port / Alias、
+  额外自定义参数；高级模式（折叠面板）提供 ubatch-size、parallel、
+  continuous batching、no-mmap、mlock、no-warmup、cache-reuse、
+  RoPE scaling / freq-scale、temp / top-k / top-p / min-p 默认采样参数；
+  所有数值与下拉控件需点击聚焦后滚轮才生效，避免滚动页面时误改；
+  下方实时显示最终生成的完整命令；GGUF 文件支持拖放；路径与参数自动记忆
   （程序目录 `llama_helper_config.json`）。
 - **Benchmark**：自定义扫描参数（n-cpu-moe / GPU Layers / Batch / ubatch /
-  Threads / Context / MTP draft n-max）+ 起始 / 结束 / 步进；扫描 ncmoe
+  Threads / Threads Batch / Context / MTP draft n-max）+ 起始 / 结束 / 步进；扫描 ncmoe
   时可选 `--cpu-moe` 基准轮。每轮自动：启动服务 → 等待 API 就绪 →
   **预热请求（不计入结果）** → 发送固定 prompt 生成指定 token → 记录
   generation/prompt tok/s、显存峰值、功耗峰值、RAM 峰值、OOM / 启动失败 →

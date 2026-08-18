@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 
 from core.params import KV_CACHE_TYPES, ROPE_SCALING_TYPES, ServerParams
 from ui.theme import MONO_STACK
-from ui.widgets import DragDropLineEdit
+from ui.widgets import DragDropLineEdit, guard_wheel_children
 
 
 class ParametersPage(QWidget):
@@ -85,9 +85,11 @@ class ParametersPage(QWidget):
 
         self.spin_ctx = self._spin(512, 1048576, 8192, 1024)
         self.spin_threads = self._spin(1, 64, 16, 1)
+        self.spin_tb = self._spin_d(0, 64, 0, 1, "默认")
         self.spin_batch = self._spin(16, 32768, 1024, 16)
         tc.addLayout(self._row("Context Size (-c)", self.spin_ctx))
         tc.addLayout(self._row("Threads (-t)", self.spin_threads))
+        tc.addLayout(self._row("Threads Batch (-tb)", self.spin_tb))
         tc.addLayout(self._row("Batch Size (-b)", self.spin_batch))
 
         ngl_row = QHBoxLayout()
@@ -158,11 +160,9 @@ class ParametersPage(QWidget):
         ac.setSpacing(10)
 
         self.spin_ubatch = self._spin_d(0, 32768, 0, 16, "默认")
-        self.spin_tb = self._spin_d(0, 64, 0, 1, "默认")
         self.spin_parallel = self._spin_d(0, 64, 0, 1, "auto")
         self.spin_cache_reuse = self._spin_d(0, 8192, 0, 16, "关闭")
         ac.addLayout(self._row("ubatch Size (-ub)", self.spin_ubatch))
-        ac.addLayout(self._row("Threads Batch (-tb)", self.spin_tb))
         ac.addLayout(self._row("Parallel Slots (-np)", self.spin_parallel))
         ac.addLayout(self._row("Cache Reuse", self.spin_cache_reuse))
 
@@ -260,6 +260,7 @@ class ParametersPage(QWidget):
             w.toggled.connect(self._on_change)
         for w in (self.combo_k, self.combo_v, self.combo_rope):
             w.currentTextChanged.connect(self._on_change)
+        guard_wheel_children(self)  # 滚轮需先聚焦控件才生效
         self._on_change()
 
     # ------------------------------------------------------------------

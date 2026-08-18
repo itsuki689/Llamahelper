@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from benchmark.runner import SWEEP_FIELDS, BenchJob, DEFAULT_TEST_PROMPT
 from core.params import ServerParams
 from ui.theme import GRAY, GREEN, MONO_STACK, RED
+from ui.widgets import guard_wheel_children
 
 
 class BenchmarkPage(QWidget):
@@ -127,6 +128,7 @@ class BenchmarkPage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         root.addWidget(self.table, 1)
+        guard_wheel_children(self)  # 滚轮需先聚焦控件才生效
 
     @staticmethod
     def _spin(lo: int, hi: int, val: int) -> QSpinBox:

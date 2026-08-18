@@ -129,6 +129,29 @@ def test_benchmark_controls(window, monkeypatch):
     assert not window.benchmark.chk_cpu_moe.isVisible()
 
 
+def test_wheel_guard(window):
+    """未聚焦的 spin 不响应滚轮，聚焦策略为 StrongFocus。"""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    spin = window.parameters.spin_ctx
+    assert spin.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert not spin.hasFocus()
+    before = spin.value()
+    ev = QWheelEvent(QPointF(5, 5), QPointF(spin.mapToGlobal(QPoint(5, 5))),
+                     QPoint(0, 0), QPoint(0, 120),
+                     Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                     Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(spin, ev)
+    assert spin.value() == before  # 未聚焦滚轮不生效
+
+
+def test_threads_batch_sweep_available():
+    from benchmark.runner import SWEEP_FIELDS
+    assert "Threads Batch" in SWEEP_FIELDS
+    assert SWEEP_FIELDS["Threads Batch"][0] == "threads_batch"
+
+
 def test_advanced_params_in_gui(window):
     p = ServerParams(
         llama_server_path="C:/llama/llama-server.exe",

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout,
+    QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 
@@ -82,6 +83,28 @@ class StatusDot(QLabel):
         color = self._COLORS.get(state, "#636366")
         self.setStyleSheet(
             f"background: {color}; border-radius: 6px;")
+
+
+class FocusWheelGuard(QObject):
+    """滚轮守卫：控件未聚焦时吃掉滚轮事件。
+
+    防止在 QScrollArea 里滚动页面时，鼠标悬停在 SpinBox/ComboBox 上
+    误改数值。控件被点击选中（聚焦）后滚轮才生效。
+    """
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
+            event.ignore()
+            return True
+        return False
+
+
+def guard_wheel_children(widget: QWidget) -> None:
+    """给 widget 下所有 SpinBox/ComboBox 安装 FocusWheelGuard。"""
+    for w in widget.findChildren(QWidget):
+        if isinstance(w, (QSpinBox, QDoubleSpinBox, QComboBox)):
+            w.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            w.installEventFilter(FocusWheelGuard(w))  # parent=w，随控件销毁
 
 
 class FormRow(QHBoxLayout):

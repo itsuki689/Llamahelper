@@ -57,6 +57,7 @@ SWEEP_FIELDS: dict[str, tuple[str, dict]] = {
     "Batch Size":     ("batch_size", {}),
     "ubatch Size":    ("ubatch_size", {}),
     "Threads":        ("threads", {}),
+    "Threads Batch":  ("threads_batch", {}),
     "Context Size":   ("context_size", {}),
     "MTP draft n-max": ("spec_draft_n_max", {"spec_mtp": True}),
 }
