@@ -34,6 +34,15 @@ def qapp():
     yield app
 
 
+def test_app_icon_exists_and_loads():
+    from PySide6.QtGui import QIcon
+
+    from main import resource_path
+    icon_path = resource_path("assets/icon.png")
+    assert icon_path.is_file()
+    assert not QIcon(str(icon_path)).isNull()
+
+
 def test_main_window_pages(window):
     assert window.stack.count() == 5
     window._switch_page(2)

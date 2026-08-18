@@ -33,7 +33,7 @@ jobs:
       - name: Build single-file exe with PyInstaller
         timeout-minutes: 15
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name LlamaHelper --collect-submodules psutil main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name LlamaHelper --icon assets/icon.ico --add-data "assets;assets" --collect-submodules psutil main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

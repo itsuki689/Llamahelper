@@ -17,6 +17,8 @@ echo [build] PyInstaller 打包中 ...
 pyinstaller --noconfirm --clean ^
     --onefile --windowed ^
     --name LlamaHelper ^
+    --icon assets/icon.ico ^
+    --add-data "assets;assets" ^
     --collect-submodules psutil ^
     main.py
 
