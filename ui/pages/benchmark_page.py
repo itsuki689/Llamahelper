@@ -47,20 +47,17 @@ class BenchmarkPage(QWidget):
         cl.setContentsMargins(16, 14, 16, 14)
         cl.setSpacing(10)
 
-        row = QHBoxLayout()
+        # 拆成两行，避免把窗口最小宽度撑大
         self.combo_sweep = QComboBox()
         self.combo_sweep.addItems(list(SWEEP_FIELDS.keys()))
         self.spin_start = self._spin(0, 1048576, 48)
         self.spin_end = self._spin(0, 1048576, 16)
         self.spin_step = self._spin(1, 4096, 8)
-        self.spin_tokens = self._spin(16, 4096, 200)
-        self.spin_warmup = self._spin(0, 1024, 32)
+        row = QHBoxLayout()
         for label, w in (("扫描参数", self.combo_sweep),
                          ("起始", self.spin_start),
                          ("结束", self.spin_end),
-                         ("步进", self.spin_step),
-                         ("生成 token 数", self.spin_tokens),
-                         ("预热 token 数", self.spin_warmup)):
+                         ("步进", self.spin_step)):
             lab = QLabel(label)
             lab.setStyleSheet(f"color: {GRAY};")
             row.addWidget(lab)
@@ -69,6 +66,18 @@ class BenchmarkPage(QWidget):
         cl.addLayout(row)
         # cpu-moe 基准轮只对 ncmoe 扫描有意义
         self.combo_sweep.currentTextChanged.connect(self._on_sweep_changed)
+
+        row_tokens = QHBoxLayout()
+        self.spin_tokens = self._spin(16, 4096, 200)
+        self.spin_warmup = self._spin(0, 1024, 32)
+        for label, w in (("生成 token 数", self.spin_tokens),
+                         ("预热 token 数", self.spin_warmup)):
+            lab = QLabel(label)
+            lab.setStyleSheet(f"color: {GRAY};")
+            row_tokens.addWidget(lab)
+            row_tokens.addWidget(w)
+        row_tokens.addStretch(1)
+        cl.addLayout(row_tokens)
 
         row2 = QHBoxLayout()
         self.chk_cpu_moe = QCheckBox("包含 --cpu-moe（全部 MoE 在 CPU）基准轮")

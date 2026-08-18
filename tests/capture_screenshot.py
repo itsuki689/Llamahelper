@@ -26,7 +26,7 @@ from ui.theme import APP_QSS
 app.setStyleSheet(APP_QSS)
 
 win = mw.MainWindow()
-win.resize(1280, 820)
+win.resize(1180, 780)
 
 # 填充一些演示数据，让截图更接近真实状态
 win.dashboard.update_gpu({"utilization": 97, "mem_used_mb": 10450,
