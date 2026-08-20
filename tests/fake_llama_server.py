@@ -36,6 +36,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok"})
 
     def do_POST(self) -> None:
+        if self.path.startswith("/v1/chat/completions"):
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                req = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                req = {}
+            msgs = req.get("messages", [])
+            user = msgs[-1].get("content", "") if msgs else ""
+            if isinstance(user, list):  # 多模态分段
+                has_img = any(p.get("type") == "image_url" for p in user)
+                user = " ".join(str(p.get("text", "")) for p in user)
+                if has_img:
+                    user = f"[image] {user}"
+            self._json(200, {
+                "choices": [{"message": {"role": "assistant",
+                                         "content": f"[译] {user}"},
+                             "finish_reason": "stop"}],
+            })
+            return
         if not self.path.startswith("/completion"):
             self._json(404, {"error": "not found"})
             return

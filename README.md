@@ -32,6 +32,11 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
   性能绿 / 加载蓝），自动滚动可暂停，可保存。
 - **Presets**：多组 JSON 预设（默认含 Qwen35B Balanced / Max Speed /
   Long Context / Low VRAM），保存于程序目录 `presets.json`。
+- **翻译挂件**（侧边栏「翻译挂件」启动）：无边框置顶的 Apple 风格桌面小窗，
+  连接当前配置的本地 llama-server。收起态为单行翻译输入，注入翻译助手
+  提示词；右键粘贴剪贴板文本或图片（图片走多模态 chat API，需模型 +
+  mmproj 支持）；后台线程请求，结果返回后自动展开显示；展开态可编辑
+  系统提示词、查看图片缩略图。提示词与窗口位置记忆在 `widget_config.json`。
 
 ## 目标环境
 
@@ -67,8 +72,10 @@ main.py                入口
 ui/                    主题、自定义控件、五个页面、主窗口
 core/                  参数/命令构建、QProcess 进程管理、性能日志解析
 monitoring/            nvidia-smi GPU 监控、psutil 系统监控（线程，可降级）
-benchmark/             ncmoe 自动扫描 Benchmark 执行器
+benchmark/             自定义参数扫描 Benchmark 执行器
 config/                配置持久化与预设管理
+widget/                翻译挂件（API 客户端 / 挂件窗体 / 挂件配置）
+tools/                 图标生成脚本
 tests/                 单元测试 + 假 llama-server 集成测试
 build.bat              PyInstaller 一键打包
 ```
