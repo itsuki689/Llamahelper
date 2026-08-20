@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.server = ServerManager(self)
         self.health_checker: ApiHealthChecker | None = None
         self.bench_runner: BenchmarkRunner | None = None
+        self._translate_widget = None
 
         # ---- UI ----
         self._build_ui()
@@ -122,6 +123,11 @@ class MainWindow(QMainWindow):
             sb.addWidget(btn)
             self.nav_buttons.append(btn)
         sb.addStretch(1)
+        # 翻译挂件入口
+        self.btn_widget = QPushButton("翻译挂件")
+        self.btn_widget.setObjectName("navBtn")
+        self.btn_widget.clicked.connect(self.open_translate_widget)
+        sb.addWidget(self.btn_widget)
 
         # 页面
         self.dashboard = DashboardPage()
@@ -141,6 +147,26 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self.nav_buttons):
             b.setChecked(i == idx)
+
+    def open_translate_widget(self) -> None:
+        """启动/唤起翻译挂件，跟随当前参数页的 host/port。"""
+        from widget.translate_widget import TranslateWidget
+
+        p = self.parameters.get_params()
+        url = p.api_base_url() + "/v1"
+        if self._translate_widget is None:
+            self._translate_widget = TranslateWidget(url)
+            self._translate_widget.closed.connect(self._on_widget_closed)
+        else:
+            self._translate_widget.set_base_url(url)
+        self._translate_widget.show()
+        self._translate_widget.raise_()
+        self._translate_widget.activateWindow()
+
+    def _on_widget_closed(self) -> None:
+        if self._translate_widget:
+            self._translate_widget.deleteLater()
+            self._translate_widget = None
 
     # ------------------------------------------------------------------
     def _wire_signals(self) -> None:
@@ -266,6 +292,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
         self.app_config.save_params(self.parameters.get_params())
+        if self._translate_widget is not None:
+            self._translate_widget.close()
         if self.bench_runner and self.bench_runner.isRunning():
             self.bench_runner.stop()
             self.bench_runner.wait(8000)
