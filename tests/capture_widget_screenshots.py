@@ -107,6 +107,8 @@ def main() -> int:
     process_until(app, lambda: long_result.mode == MODE_RESULT
                   and long_result._content_opacity > 0.99)
     save_widget(app, long_result, "translation_long_result.png")
+    long_result._set_result_frame_press_progress(1.0)
+    save_widget(app, long_result, "translation_frame_pressed.png")
     long_result.close()
 
     docked = TranslateWidget(
@@ -143,6 +145,9 @@ def main() -> int:
         if not ok:
             raise RuntimeError("Translation result did not arrive")
         save_widget(app, translated, "translation_short_result.png")
+        translated._copy_result_to_clipboard()
+        process_until(app, lambda: translated.result_text_copied)
+        save_widget(app, translated, "translation_copied.png")
         translated.close()
     finally:
         server.terminate()

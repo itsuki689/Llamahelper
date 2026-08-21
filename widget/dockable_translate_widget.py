@@ -20,6 +20,7 @@ from widget.settings import WidgetSettings
 MODE_IDLE = "idle"
 MODE_PROCESSING = "processing"
 MODE_RESULT = "result"
+MODE_COLLAPSING = "collapsing"
 MODE_DOCKED = "docked"
 
 CIRCLE_WINDOW = 66
@@ -80,6 +81,11 @@ class TranslateWidget(QWidget):
         self._result_text = ""
         self._result_direction = "right"
         self._result_multiline = False
+        self._result_frame_inset = 5.0
+        self._result_frame_width = 1.45
+        self._result_frame_alpha = 232.0
+        self._text_gray_progress = 0.0
+        self._result_press_target: str | None = None
         self._ring_diameter = RING_IDLE
         self._stripe_length = STRIPE_IDLE
         self._content_opacity = 0.0
@@ -94,6 +100,8 @@ class TranslateWidget(QWidget):
         self._ring_animation: QVariantAnimation | None = None
         self._stripe_animation: QVariantAnimation | None = None
         self._opacity_animation: QVariantAnimation | None = None
+        self._result_frame_animation: QVariantAnimation | None = None
+        self._text_color_animation: QVariantAnimation | None = None
         self._processing_pulse = QTimer(self)
         self._processing_pulse.setInterval(460)
         self._processing_pulse.timeout.connect(self._pulse_processing_ring)
@@ -124,6 +132,10 @@ class TranslateWidget(QWidget):
     @property
     def stripe_length(self) -> float:
         return self._stripe_length
+
+    @property
+    def result_text_copied(self) -> bool:
+        return self._text_gray_progress >= 0.99
 
     def set_base_url(self, url: str) -> None:
         self.base_url = url
@@ -188,6 +200,7 @@ class TranslateWidget(QWidget):
         self._image = image
         self._result_text = ""
         self._result_multiline = False
+        self._reset_result_feedback()
         self._content_opacity = 0.0
         self._processing_pulse.stop()
         self._set_mode(MODE_PROCESSING)
@@ -210,6 +223,7 @@ class TranslateWidget(QWidget):
     def _show_result(self, text: str) -> None:
         self._processing_pulse.stop()
         self._result_text = text.strip() or "模型返回了空内容"
+        self._reset_result_feedback()
         layout = self._calculate_result_layout(self._result_text)
         self._result_direction = layout.direction
         self._result_multiline = layout.multiline
@@ -217,6 +231,68 @@ class TranslateWidget(QWidget):
         self._ring_diameter = RING_IDLE
         self._animate_geometry(layout.geometry, 360, self._save_settings)
         self._animate_content_opacity(1.0, 320)
+
+    def _reset_result_feedback(self) -> None:
+        if self._result_frame_animation is not None:
+            self._result_frame_animation.stop()
+        if self._text_color_animation is not None:
+            self._text_color_animation.stop()
+        self._result_frame_inset = 5.0
+        self._result_frame_width = 1.45
+        self._result_frame_alpha = 232.0
+        self._text_gray_progress = 0.0
+        self._result_press_target = None
+
+    def _copy_result_to_clipboard(self) -> None:
+        if self._mode != MODE_RESULT or not self._result_text:
+            return
+        QApplication.clipboard().setText(self._result_text)
+        if self._text_color_animation is not None:
+            self._text_color_animation.stop()
+        animation = QVariantAnimation(self)
+        animation.setDuration(170)
+        animation.setStartValue(self._text_gray_progress)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._set_text_gray_progress)
+        self._text_color_animation = animation
+        animation.start()
+
+    def _press_result_frame_and_collapse(self) -> None:
+        if self._mode != MODE_RESULT:
+            return
+        if self._result_frame_animation is not None:
+            self._result_frame_animation.stop()
+        animation = QVariantAnimation(self)
+        animation.setDuration(125)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._set_result_frame_press_progress)
+        animation.finished.connect(self._collapse_result_to_orb)
+        self._result_frame_animation = animation
+        animation.start()
+
+    def _collapse_result_to_orb(self) -> None:
+        if self._mode != MODE_RESULT:
+            return
+        self._set_mode(MODE_COLLAPSING)
+        self._result_multiline = False
+        self._animate_content_opacity(0.0, 110)
+        self._animate_geometry(
+            self._circle_geometry(self._anchor_center),
+            330,
+            self._finish_result_collapse,
+        )
+
+    def _finish_result_collapse(self) -> None:
+        self._result_text = ""
+        self._content_opacity = 0.0
+        self._ring_diameter = RING_IDLE
+        self._reset_result_feedback()
+        self._set_mode(MODE_IDLE)
+        self.unsetCursor()
+        self._save_settings()
 
     def _pulse_processing_ring(self) -> None:
         target = (RING_PROCESSING_LARGE
@@ -418,6 +494,17 @@ class TranslateWidget(QWidget):
         self._content_opacity = float(value)
         self.update()
 
+    def _set_text_gray_progress(self, value) -> None:
+        self._text_gray_progress = float(value)
+        self.update()
+
+    def _set_result_frame_press_progress(self, value) -> None:
+        progress = float(value)
+        self._result_frame_inset = 5.0 + 4.0 * progress
+        self._result_frame_width = 1.45 + 1.55 * progress
+        self._result_frame_alpha = 232.0 + 23.0 * progress
+        self.update()
+
     def _set_mode(self, mode: str) -> None:
         if self._mode != mode:
             self._mode = mode
@@ -485,19 +572,61 @@ class TranslateWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(body, radius, radius)
 
-        inner = body.adjusted(5, 5, -5, -5)
+        inset = self._result_frame_inset
+        inner = body.adjusted(inset, inset, -inset, -inset)
         inner_radius = inner.height() / 2 if not self._result_multiline else 13.0
-        painter.setPen(QPen(QColor(255, 255, 255, 232), 1.45))
+        painter.setPen(QPen(
+            QColor(255, 255, 255, round(self._result_frame_alpha)),
+            self._result_frame_width,
+        ))
         painter.drawRoundedRect(inner, inner_radius, inner_radius)
         alpha = max(0, min(255, round(255 * self._content_opacity)))
-        painter.setPen(QColor(247, 247, 250, alpha))
+        gray = self._text_gray_progress
+        painter.setPen(QColor(
+            round(247 + (142 - 247) * gray),
+            round(247 + (142 - 247) * gray),
+            round(250 + (147 - 250) * gray),
+            alpha,
+        ))
         painter.setFont(self._result_font())
-        text_rect = body.adjusted(18, 13, -18, -13)
+        text_rect = self._result_text_area()
         flags = (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
                  if not self._result_multiline
                  else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
                  | Qt.TextFlag.TextWordWrap)
         painter.drawText(text_rect, int(flags), self._result_text)
+
+    def _result_body_rect(self) -> QRectF:
+        return QRectF(self.rect()).adjusted(
+            PAINT_MARGIN, PAINT_MARGIN, -PAINT_MARGIN, -PAINT_MARGIN)
+
+    def _result_text_area(self) -> QRectF:
+        return self._result_body_rect().adjusted(18, 13, -18, -13)
+
+    def _result_text_hit_rect(self) -> QRectF:
+        """Return the visible glyph area's forgiving click target."""
+        area = self._result_text_area()
+        metrics = QFontMetrics(self._result_font())
+        if not self._result_multiline:
+            width = min(area.width(), metrics.horizontalAdvance(self._result_text))
+            height = min(area.height(), metrics.height())
+            hit = QRectF(
+                area.left(), area.center().y() - height / 2,
+                width, height,
+            )
+        else:
+            bounds = metrics.boundingRect(
+                QRect(0, 0, max(1, int(area.width())),
+                      max(1, int(area.height()))),
+                Qt.TextFlag.TextWordWrap,
+                self._result_text,
+            )
+            hit = QRectF(
+                area.left(), area.top(),
+                min(area.width(), bounds.width()),
+                min(area.height(), bounds.height()),
+            )
+        return hit.adjusted(-4, -4, 4, 4)
 
     @staticmethod
     def _result_font() -> QFont:
@@ -516,6 +645,7 @@ class TranslateWidget(QWidget):
 
     def leaveEvent(self, event) -> None:
         self._hovered = False
+        self.unsetCursor()
         if self._mode == MODE_IDLE:
             self._animate_ring(RING_IDLE)
         elif self._mode == MODE_DOCKED:
@@ -524,6 +654,18 @@ class TranslateWidget(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._mode == MODE_RESULT:
+                self._result_press_target = (
+                    "text" if self._result_text_hit_rect().contains(event.position())
+                    else "frame"
+                )
+                self._drag_offset = None
+                self._dragged = False
+                event.accept()
+                return
+            if self._mode == MODE_COLLAPSING:
+                event.accept()
+                return
             self._drag_start_pos = event.globalPosition().toPoint()
             self._dragged = False
             if self._mode != MODE_DOCKED:
@@ -539,6 +681,10 @@ class TranslateWidget(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._mode == MODE_RESULT and not event.buttons():
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            event.accept()
+            return
         if (self._mode != MODE_DOCKED and self._drag_offset is not None
                 and event.buttons() & Qt.MouseButton.LeftButton):
             global_pos = event.globalPosition().toPoint()
@@ -557,10 +703,23 @@ class TranslateWidget(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.RightButton:
-            self.paste_clipboard()
+            if self._mode != MODE_COLLAPSING:
+                self.paste_clipboard()
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._mode == MODE_RESULT:
+                over_text = self._result_text_hit_rect().contains(event.position())
+                if self._result_press_target == "text" and over_text:
+                    self._copy_result_to_clipboard()
+                elif self._result_press_target == "frame" and not over_text:
+                    self._press_result_frame_and_collapse()
+                self._result_press_target = None
+                event.accept()
+                return
+            if self._mode == MODE_COLLAPSING:
+                event.accept()
+                return
             if self._mode == MODE_DOCKED:
                 self.undock()
             elif self._dragged:

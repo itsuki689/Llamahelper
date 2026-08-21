@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QAbstractAnimation, QPoint, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -171,6 +171,66 @@ def test_long_result_expands_downward(qapp, tmp_path):
     w._show_result("这是一段很长的翻译结果。" * 30)
     assert w.result_multiline
     assert pump_until(lambda: w.height() > 100)
+    w.close()
+
+
+def test_result_text_click_copies_and_turns_gray(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.show()
+    w._show_result("复制这段翻译")
+    assert pump_until(lambda: w.mode == MODE_RESULT
+                      and w._content_opacity > 0.99
+                      and w._geometry_animation.state()
+                      == QAbstractAnimation.State.Stopped)
+    original_pos = w.pos()
+    QApplication.clipboard().clear()
+    QTest.mouseClick(
+        w,
+        Qt.MouseButton.LeftButton,
+        pos=w._result_text_hit_rect().center().toPoint(),
+    )
+    assert QApplication.clipboard().text() == "复制这段翻译"
+    assert pump_until(lambda: w.result_text_copied)
+    assert w.mode == MODE_RESULT and w.pos() == original_pos
+    w.close()
+
+
+def test_result_frame_click_animates_back_to_orb(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.show()
+    w._show_result("点击白圈收起")
+    assert pump_until(lambda: w.mode == MODE_RESULT and w.width() > w.height())
+    QTest.mouseClick(
+        w,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(11, w.height() // 2),
+    )
+    assert pump_until(lambda: w._result_frame_inset >= 8.9)
+    assert pump_until(lambda: w.mode == MODE_IDLE
+                      and w.width() == CIRCLE_WINDOW
+                      and w.height() == CIRCLE_WINDOW)
+    w.close()
+
+
+def test_result_state_does_not_start_drag(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.show()
+    w._show_result("结果展示时禁止拖曳")
+    assert pump_until(lambda: w.mode == MODE_RESULT and w.width() > w.height())
+    QTest.mousePress(
+        w,
+        Qt.MouseButton.LeftButton,
+        pos=w._result_text_hit_rect().center().toPoint(),
+    )
+    assert w._drag_offset is None
+    QTest.mouseRelease(
+        w,
+        Qt.MouseButton.LeftButton,
+        pos=w._result_text_hit_rect().center().toPoint(),
+    )
     w.close()
 
 
