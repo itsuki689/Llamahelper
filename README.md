@@ -30,7 +30,7 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
   关闭服务。结果表格按 generation tok/s 排名并标记最快配置，可导出 CSV。
   另支持 **ASR 语音识别模型模式**（如 Qwen3-ASR-1.7B）：不以生成速度排名，
   改用 **RTF（Real-Time Factor）= 音频时长 ÷ 识别耗时**（越大越好）；
-  参考音频（wav / flac）由用户放入指定目录（默认程序目录 `benchmark_audio/`），
+  参考音频（wav / flac / mp3）由用户放入指定目录（默认程序目录 `benchmark_audio/`），
   音频经 `/v1/chat/completions` 的 `input_audio`（base64）发送，逐文件识别并
   计时，先用首个文件预热一轮，表格按平均 RTF 排名。
 - **Logs**：QProcess 实时输出 stdout/stderr，按级别着色（错误红 / 警告黄 /
@@ -77,7 +77,7 @@ main.py                入口
 ui/                    主题、自定义控件、五个页面、主窗口
 core/                  参数/命令构建、QProcess 进程管理、性能日志解析
 monitoring/            nvidia-smi GPU 监控、psutil 系统监控（线程，可降级）
-benchmark/             自定义参数扫描 Benchmark 执行器、ASR 音频时长解析（wav/flac）
+benchmark/             自定义参数扫描 Benchmark 执行器、ASR 音频时长解析（wav/flac/mp3）
 config/                配置持久化与预设管理
 widget/                翻译挂件（API 客户端 / 挂件窗体 / 挂件配置）
 tools/                 图标生成脚本

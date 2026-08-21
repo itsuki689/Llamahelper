@@ -273,7 +273,7 @@ class MainWindow(QMainWindow):
             if not list_audio_files(job.audio_dir):
                 QMessageBox.warning(
                     self, "Benchmark",
-                    f"音频目录中没有 wav/flac 文件：\n{job.audio_dir}\n\n"
+                    f"音频目录中没有 wav/flac/mp3 文件：\n{job.audio_dir}\n\n"
                     "请先把参考音频放入该目录。")
                 self.benchmark.set_running(False)
                 return

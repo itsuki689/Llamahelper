@@ -52,7 +52,7 @@ class BenchJob:
     warmup_tokens: int = 32          # gen 模式：正式测量前的预热 token 数
     include_cpu_moe: bool = True     # 仅扫描 ncmoe 时有效：加测 --cpu-moe 基准轮
     prompt: str = DEFAULT_TEST_PROMPT
-    audio_dir: str = ""              # asr 模式：参考音频目录（用户放入 wav/flac）
+    audio_dir: str = ""              # asr 模式：参考音频目录（用户放入 wav/flac/mp3）
     health_timeout: float = 180.0
 
 
@@ -115,7 +115,7 @@ class BenchmarkRunner(QThread):
     def run(self) -> None:
         if self.job.mode == "asr" and not list_audio_files(self.job.audio_dir):
             self.sig_log.emit(
-                f"[bench] 音频目录中没有 wav/flac 文件: {self.job.audio_dir}")
+                f"[bench] 音频目录中没有 wav/flac/mp3 文件: {self.job.audio_dir}")
             self.sig_finished_all.emit()
             return
         configs = build_config_list(self.job)
@@ -336,7 +336,7 @@ class BenchmarkRunner(QThread):
                      result: dict) -> None:
         files = list_audio_files(self.job.audio_dir)
         if not files:
-            result["error"] = f"音频目录中没有 wav/flac 文件: {self.job.audio_dir}"
+            result["error"] = f"音频目录中没有 wav/flac/mp3 文件: {self.job.audio_dir}"
             return
         # 预热：用第一个文件跑一次，不计入统计
         self.sig_log.emit(f"[bench] ASR 预热（{files[0].name}，不计入）…")

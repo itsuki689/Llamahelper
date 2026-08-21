@@ -47,8 +47,41 @@ def test_flac_duration(tmp_path):
     assert abs(audio_duration(f) - 3.0) < 0.01
 
 
-def test_unsupported_suffix(tmp_path):
+def make_mp3(path: Path, frames: int = 100, id3: bool = False) -> float:
+    """手工构造 MPEG1 Layer3 128kbps 44100Hz 的 MP3，返回预期时长（秒）。"""
+    header = bytes([0xFF, 0xFB, 0x90, 0x00])   # sync/V1/L3, 128k idx9, 44.1k idx0
+    frame_len = 144 * 128000 // 44100          # 417 字节
+    body = header + b"\x00" * (frame_len - 4)
+    data = body * frames
+    if id3:
+        # ID3v2 标签：syncsafe size=20，标签体里故意放假同步头干扰
+        tag = b"ID3" + bytes([4, 0, 0, 0, 0, 0, 20])
+        data = tag + bytes([0xFF, 0xFB, 0x90, 0x00]) + b"\x00" * 16 + data
+    path.write_bytes(data)
+    return frames * 1152 / 44100
+
+
+def test_mp3_duration(tmp_path):
     f = tmp_path / "c.mp3"
+    expected = make_mp3(f, frames=100)
+    assert abs(audio_duration(f) - expected) < 0.01
+
+
+def test_mp3_duration_with_id3(tmp_path):
+    f = tmp_path / "d.mp3"
+    expected = make_mp3(f, frames=50, id3=True)
+    assert abs(audio_duration(f) - expected) < 0.01
+
+
+def test_unsupported_suffix(tmp_path):
+    f = tmp_path / "c.ogg"
+    f.write_bytes(b"\x00" * 64)
+    with pytest.raises(ValueError):
+        audio_duration(f)
+
+
+def test_invalid_mp3_raises(tmp_path):
+    f = tmp_path / "broken.mp3"
     f.write_bytes(b"\x00" * 64)
     with pytest.raises(ValueError):
         audio_duration(f)
@@ -57,9 +90,10 @@ def test_unsupported_suffix(tmp_path):
 def test_list_audio_files(tmp_path):
     make_wav(tmp_path / "b.wav")
     make_wav(tmp_path / "a.wav")
+    make_mp3(tmp_path / "c.mp3", frames=1)
     (tmp_path / "note.txt").write_text("x")
     files = list_audio_files(tmp_path)
-    assert [f.name for f in files] == ["a.wav", "b.wav"]
+    assert [f.name for f in files] == ["a.wav", "b.wav", "c.mp3"]
     assert list_audio_files(tmp_path / "nope") == []
 
 

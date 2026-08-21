@@ -3,7 +3,7 @@
 两种模式：
 - gen：生成模型，指标为 generation tok/s（越高越快）
 - asr：语音识别模型（如 Qwen3-ASR），指标为 RTF = 音频时长 / 识别耗时
-  （越高越快），参考音频由用户放入指定目录（wav/flac）
+  （越高越快），参考音频由用户放入指定目录（wav/flac/mp3）
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class BenchmarkPage(QWidget):
         audio_lab = QLabel("参考音频目录")
         audio_lab.setStyleSheet(f"color: {GRAY};")
         self.audio_edit = QLineEdit(str(app_dir() / "benchmark_audio"))
-        self.audio_edit.setPlaceholderText("把 wav/flac 参考音频放入该目录")
+        self.audio_edit.setPlaceholderText("把 wav/flac/mp3 参考音频放入该目录")
         btn_audio = QPushButton("浏览…")
         btn_audio.clicked.connect(self._browse_audio_dir)
         row_audio.addWidget(audio_lab)
@@ -113,7 +113,7 @@ class BenchmarkPage(QWidget):
         row_audio.addWidget(btn_audio)
         cl.addWidget(self.audio_box)
         audio_hint = QLabel("RTF = 音频时长 / 识别耗时（越大越快）；"
-                            "每轮先预热一次再逐文件测量；支持 wav / flac")
+                            "每轮先预热一次再逐文件测量；支持 wav / flac / mp3")
         audio_hint.setStyleSheet(f"color: {GRAY}; font-size: 11px;")
         cl.addWidget(audio_hint)
         self._audio_hint = audio_hint
