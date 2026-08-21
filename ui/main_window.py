@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
 
     def open_translate_widget(self) -> None:
         """启动/唤起翻译挂件，跟随当前参数页的 host/port。"""
-        from widget.translate_widget import TranslateWidget
+        from widget.dockable_translate_widget import TranslateWidget
 
         p = self.parameters.get_params()
         url = p.api_base_url() + "/v1"

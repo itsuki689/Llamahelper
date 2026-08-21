@@ -5,6 +5,8 @@ build/
 dist/
 *.spec
 llama_helper_config.json
+widget_config.json
 presets.json
 benchmark_results.csv
 .pytest_cache/
+screenshots/

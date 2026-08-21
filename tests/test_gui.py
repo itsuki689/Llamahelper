@@ -43,6 +43,20 @@ def test_app_icon_exists_and_loads():
     assert not QIcon(str(icon_path)).isNull()
 
 
+def test_main_window_opens_dockable_translation_widget(window, qapp):
+    from widget.dockable_translate_widget import (
+        MODE_DOCKED, MODE_IDLE, TranslateWidget,
+    )
+
+    window.open_translate_widget()
+    qapp.processEvents()
+    assert isinstance(window._translate_widget, TranslateWidget)
+    assert window._translate_widget.mode in {MODE_IDLE, MODE_DOCKED}
+    window._translate_widget.close()
+    qapp.processEvents()
+    assert window._translate_widget is None
+
+
 def test_main_window_pages(window):
     assert window.stack.count() == 5
     window._switch_page(2)

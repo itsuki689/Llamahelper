@@ -11,14 +11,19 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("PySide6")
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QImage
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from widget.api_client import (DEFAULT_TRANSLATE_PROMPT, ChatWorker,
                                build_chat_payload, extract_reply,
                                image_to_data_url)
 from widget.settings import WidgetSettings
-from widget.translate_widget import TranslateWidget
+from widget.dockable_translate_widget import (
+    CIRCLE_WINDOW, DOCK_HEIGHT, DOCK_WIDTH, MODE_DOCKED, MODE_IDLE,
+    MODE_PROCESSING, MODE_RESULT, RING_HOVER, STRIPE_HOVER, TranslateWidget,
+)
 
 FAKE_SERVER = Path(__file__).parent / "fake_llama_server.py"
 
@@ -78,45 +83,111 @@ def test_extract_reply():
 
 
 # ---------------------------------------------------------------------
-def test_widget_states_and_prompt(qapp, tmp_path):
+def test_widget_idle_and_prompt_persistence(qapp, tmp_path):
     w = TranslateWidget("http://127.0.0.1:1/v1",
                         WidgetSettings(tmp_path / "w.json"))
-    assert not w.expanded                      # 默认收起 = 翻译输入态
-    assert w.collapsed_box.isVisibleTo(w)
-    assert not w.expanded_box.isVisibleTo(w)
-    # 默认注入翻译提示词
-    assert "translation assistant" in w.prompt_edit.toPlainText()
-    w.toggle_state()
-    assert w.expanded and w.expanded_box.isVisibleTo(w)
-    w.prompt_edit.setPlainText("自定义提示词")
-    w._save_settings()
-    # 重新打开应恢复提示词
+    assert w.mode == MODE_IDLE
+    assert w.width() == CIRCLE_WINDOW and w.height() == CIRCLE_WINDOW
+    assert "右键粘贴" in w.toolTip()
+    w.set_system_prompt("自定义提示词")
     w2 = TranslateWidget("http://127.0.0.1:1/v1",
                          WidgetSettings(tmp_path / "w.json"))
-    assert w2.prompt_edit.toPlainText() == "自定义提示词"
+    assert w2._system_prompt == "自定义提示词"
     w.close()
     w2.close()
 
 
-def test_widget_paste_text(qapp, tmp_path):
+def test_hover_ring_expands(qapp, tmp_path):
     w = TranslateWidget("http://127.0.0.1:1/v1",
                         WidgetSettings(tmp_path / "w.json"))
-    QApplication.clipboard().setText("剪贴板里的文字")
-    w.paste_clipboard()
-    assert w.quick_input.text() == "剪贴板里的文字"
+    w._animate_ring(RING_HOVER, 20)
+    assert pump_until(lambda: abs(w.ring_diameter - RING_HOVER) < 0.1)
     w.close()
 
 
-def test_widget_paste_image_auto_expands(qapp, tmp_path):
+def test_widget_paste_text_starts_processing(qapp, tmp_path, monkeypatch):
     w = TranslateWidget("http://127.0.0.1:1/v1",
                         WidgetSettings(tmp_path / "w.json"))
+    captured = []
+    monkeypatch.setattr(
+        w, "_begin_translation",
+        lambda text, image: captured.append((text, image)) or True,
+    )
+    QApplication.clipboard().setText("剪贴板里的文字")
+    assert w.paste_clipboard()
+    assert captured == [("剪贴板里的文字", None)]
+    w.close()
+
+
+def test_right_click_triggers_clipboard_paste(qapp, tmp_path, monkeypatch):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    called = []
+    monkeypatch.setattr(w, "paste_clipboard", lambda: called.append(True) or True)
+    w.show()
+    QTest.mouseClick(w, Qt.MouseButton.RightButton)
+    qapp.processEvents()
+    assert called == [True]
+    w.close()
+
+
+def test_widget_paste_image_starts_processing(qapp, tmp_path, monkeypatch):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    captured = []
+    monkeypatch.setattr(
+        w, "_begin_translation",
+        lambda text, image: captured.append((text, image)) or True,
+    )
+    QApplication.clipboard().clear()
     QApplication.clipboard().setImage(make_image())
-    w.paste_clipboard()
-    assert w.expanded                    # 图片自动展开显示缩略图
-    assert w.thumb.isVisibleTo(w)
-    assert w._image is not None
-    w._clear_image()
-    assert w._image is None and not w.thumb.isVisibleTo(w)
+    assert w.paste_clipboard()
+    assert captured[0][0] == ""
+    assert isinstance(captured[0][1], QImage)
+    w.close()
+
+
+def test_result_expands_toward_available_space(qapp, tmp_path):
+    available = qapp.primaryScreen().availableGeometry()
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.move(available.left() + 40, available.top() + 100)
+    w._anchor_center = w.geometry().center()
+    w._show_result("Hello, world")
+    assert w.mode == MODE_RESULT
+    assert w.result_direction == "right"
+    assert not w.result_multiline
+    assert pump_until(lambda: w.width() > w.height())
+
+    w._anchor_center = QPoint(available.right() - 40, available.top() + 140)
+    w._show_result("你好，世界")
+    assert w.result_direction == "left"
+    w.close()
+
+
+def test_long_result_expands_downward(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w._show_result("这是一段很长的翻译结果。" * 30)
+    assert w.result_multiline
+    assert pump_until(lambda: w.height() > 100)
+    w.close()
+
+
+def test_dock_handle_hover_and_click_target(qapp, tmp_path):
+    settings = WidgetSettings(tmp_path / "w.json")
+    w = TranslateWidget("http://127.0.0.1:1/v1", settings)
+    w.dock_to("left", animate=False)
+    assert w.mode == MODE_DOCKED and w.dock_edge == "left"
+    assert (w.width(), w.height()) == (DOCK_WIDTH, DOCK_HEIGHT)
+    w._animate_stripe(STRIPE_HOVER, 20)
+    assert pump_until(lambda: abs(w.stripe_length - STRIPE_HOVER) < 0.1)
+    w.show()
+    QTest.mouseClick(w, Qt.MouseButton.LeftButton)
+    assert pump_until(lambda: w.mode == MODE_IDLE
+                      and w.width() == CIRCLE_WINDOW
+                      and w.height() == CIRCLE_WINDOW)
+    assert w.dock_edge is None
     w.close()
 
 
@@ -141,10 +212,10 @@ def test_widget_translate_e2e(qapp, tmp_path):
                 time.sleep(0.1)
         w = TranslateWidget(f"http://127.0.0.1:{port}/v1",
                             WidgetSettings(tmp_path / "w.json"))
-        w.quick_input.setText("你好，世界")
-        w.translate()
-        assert pump_until(lambda: w.expanded
-                          and "[译] 你好，世界" in w.result_view.toPlainText())
+        assert w.translate("你好，世界")
+        assert w.mode == MODE_PROCESSING
+        assert pump_until(lambda: w.mode == MODE_RESULT
+                          and "[译] 你好，世界" in w._result_text)
         w.close()
     finally:
         proc.terminate()
