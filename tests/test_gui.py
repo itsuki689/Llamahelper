@@ -155,6 +155,21 @@ def test_wheel_guard(window):
     assert spin.value() == before  # 未聚焦滚轮不生效
 
 
+def test_benchmark_asr_mode_ui(window, monkeypatch):
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    bp = window.benchmark
+    assert bp._current_mode() == "gen"
+    assert bp.prompt_box.isVisibleTo(bp)
+    assert not bp.audio_box.isVisibleTo(bp)
+    bp.combo_mode.setCurrentText("ASR 语音识别（RTF）")
+    assert bp.audio_box.isVisibleTo(bp)
+    assert not bp.prompt_box.isVisibleTo(bp)
+    assert not bp.tokens_box.isVisibleTo(bp)
+    bp._on_run()
+    from ui.pages.benchmark_page import ASR_COLUMNS
+    assert bp.table.columnCount() == len(ASR_COLUMNS)
+
+
 def test_threads_batch_sweep_available():
     from benchmark.runner import SWEEP_FIELDS
     assert "Threads Batch" in SWEEP_FIELDS

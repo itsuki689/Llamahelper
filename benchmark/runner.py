@@ -1,11 +1,13 @@
-"""自动 Benchmark：按 ncmoe 区间批量启动 llama-server 并测量性能。
+"""自动 Benchmark：按参数区间批量启动 llama-server 并测量性能。
 
-每轮流程：启动进程 → 等待 /health 就绪 → POST /completion 生成固定 token →
-记录 generation/prompt tok/s、显存/功耗/RAM 峰值 → 关闭进程 → 下一轮。
+gen 模式：启动进程 → 等待 /health 就绪 → 预热 → POST /completion 生成固定
+token → 记录 generation/prompt tok/s、显存/功耗/RAM 峰值 → 关闭进程。
+asr 模式：对目录中的每段参考音频发识别请求，RTF = 音频时长 / 识别耗时。
 全部在 QThread 中执行，不阻塞 UI。
 """
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -14,10 +16,12 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import psutil
 from PySide6.QtCore import QThread, Signal
 
+from benchmark.audio import audio_duration, list_audio_files
 from core.params import ServerParams
 from core.server_manager import port_in_use
 from monitoring.gpu_monitor import query_gpu
@@ -39,14 +43,16 @@ DEFAULT_TEST_PROMPT = (
 @dataclass
 class BenchJob:
     base_params: ServerParams
+    mode: str = "gen"                # "gen"（生成 tok/s）| "asr"（语音识别 RTF）
     sweep_field: str = "n_cpu_moe"   # 扫描目标（见 SWEEP_FIELDS）
     sweep_start: int = 48
     sweep_end: int = 16
     sweep_step: int = 8
     gen_tokens: int = 200
-    warmup_tokens: int = 32          # 正式测量前的预热 token 数
+    warmup_tokens: int = 32          # gen 模式：正式测量前的预热 token 数
     include_cpu_moe: bool = True     # 仅扫描 ncmoe 时有效：加测 --cpu-moe 基准轮
     prompt: str = DEFAULT_TEST_PROMPT
+    audio_dir: str = ""              # asr 模式：参考音频目录（用户放入 wav/flac）
     health_timeout: float = 180.0
 
 
@@ -107,6 +113,11 @@ class BenchmarkRunner(QThread):
 
     # ------------------------------------------------------------------
     def run(self) -> None:
+        if self.job.mode == "asr" and not list_audio_files(self.job.audio_dir):
+            self.sig_log.emit(
+                f"[bench] 音频目录中没有 wav/flac 文件: {self.job.audio_dir}")
+            self.sig_finished_all.emit()
+            return
         configs = build_config_list(self.job)
         total = len(configs)
         for i, cfg in enumerate(configs):
@@ -130,6 +141,8 @@ class BenchmarkRunner(QThread):
             "value": overrides.get(self.job.sweep_field, ""),
             "cpu_moe": overrides.get("cpu_moe", False),
             "gen_tps": 0.0, "prompt_tps": 0.0,
+            # ASR 模式指标：RTF = 音频总时长 / 识别总耗时（越大越快）
+            "rtf": 0.0, "audio_s": 0.0, "infer_s": 0.0, "asr_files": 0,
             "vram_peak_mb": 0.0, "power_peak_w": 0.0, "ram_peak_mb": 0.0,
             "ok": False, "status": "失败", "error": "",
         }
@@ -157,9 +170,12 @@ class BenchmarkRunner(QThread):
         try:
             ready = self._wait_ready(proc, params, result)
             if ready and not self._stop_requested:
-                self._warmup(params)
-                self._sample_peaks(proc, result)
-                self._measure(proc, params, result)
+                if self.job.mode == "asr":
+                    self._measure_asr(proc, params, result)
+                else:
+                    self._warmup(params)
+                    self._sample_peaks(proc, result)
+                    self._measure(proc, params, result)
             elif self._stop_requested:
                 result["status"] = "中止"
                 result["error"] = "用户中止"
@@ -290,6 +306,103 @@ class BenchmarkRunner(QThread):
                 f"prompt {result['prompt_tps']:.2f} tok/s")
         else:
             result["error"] = "响应中缺少 timings 数据"
+
+    # ------------------------------------------------------------------
+    # ASR 模式：RTF = 音频时长 / 识别耗时
+    def _post_audio(self, params: ServerParams, audio_path,
+                    timeout: float = 300.0) -> None:
+        """发送一次音频识别请求（OpenAI 兼容 input_audio），返回 None。"""
+        audio_path = Path(audio_path)
+        b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+        fmt = audio_path.suffix.lstrip(".").lower()
+        url = f"http://{params.host}:{params.port}/v1/chat/completions"
+        payload = json.dumps({
+            "messages": [{"role": "user", "content": [
+                {"type": "input_audio",
+                 "input_audio": {"data": b64, "format": fmt}},
+                {"type": "text",
+                 "text": "Transcribe the audio into text. "
+                         "Output only the transcription."},
+            ]}],
+            "temperature": 0.0,
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+
+    def _measure_asr(self, proc: subprocess.Popen, params: ServerParams,
+                     result: dict) -> None:
+        files = list_audio_files(self.job.audio_dir)
+        if not files:
+            result["error"] = f"音频目录中没有 wav/flac 文件: {self.job.audio_dir}"
+            return
+        # 预热：用第一个文件跑一次，不计入统计
+        self.sig_log.emit(f"[bench] ASR 预热（{files[0].name}，不计入）…")
+        try:
+            self._post_audio(params, files[0], timeout=120.0)
+        except Exception as e:
+            self.sig_log.emit(f"[bench] ASR 预热失败（继续测量）: {e}")
+        self._sample_peaks(proc, result)
+
+        total_audio = 0.0
+        total_infer = 0.0
+        done = 0
+        for f in files:
+            if self._stop_requested:
+                break
+            if proc.poll() is not None:
+                result["error"] = f"识别过程中进程退出，exit code = {proc.returncode}"
+                return
+            try:
+                dur = audio_duration(f)
+            except ValueError as e:
+                self.sig_log.emit(f"[bench] 跳过 {f.name}: {e}")
+                continue
+            holder: dict = {}
+
+            def do_request(path=f) -> None:
+                t0 = time.perf_counter()
+                try:
+                    self._post_audio(params, path)
+                    holder["elapsed"] = time.perf_counter() - t0
+                except Exception as e:
+                    holder["error"] = str(e)
+
+            t = threading.Thread(target=do_request, daemon=True)
+            t.start()
+            while t.is_alive():
+                if self._stop_requested:
+                    return
+                self._sample_peaks(proc, result)
+                time.sleep(0.3)
+            t.join(timeout=10)
+            if "error" in holder:
+                self.sig_log.emit(f"[bench] {f.name} 识别失败: {holder['error']}")
+                continue
+            elapsed = holder.get("elapsed", 0.0)
+            if elapsed <= 0:
+                continue
+            total_audio += dur
+            total_infer += elapsed
+            done += 1
+            self.sig_log.emit(
+                f"[bench] {f.name}: 音频 {dur:.2f}s / 识别 {elapsed:.2f}s "
+                f"= RTF {dur / elapsed:.2f}")
+
+        if done and total_infer > 0:
+            result["rtf"] = total_audio / total_infer
+            result["audio_s"] = total_audio
+            result["infer_s"] = total_infer
+            result["asr_files"] = done
+            result["ok"] = True
+            result["status"] = "OK"
+            self.sig_log.emit(
+                f"[bench] {result['label']}: 平均 RTF {result['rtf']:.2f} "
+                f"({done} 个文件)")
+        elif not result["error"]:
+            result["error"] = "没有成功识别的音频文件"
 
     def _shutdown(self, proc: subprocess.Popen) -> None:
         if proc.poll() is not None:

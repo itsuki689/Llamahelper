@@ -12,11 +12,11 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
   打开 WebUI、复制 API URL、PID 显示、防重复启动、端口占用检测。
 - **Parameters**：llama-server / GGUF 模型 / mmproj 投影文件（`-mm`，可选，
   多模态模型用）路径选择，GGUF 支持拖放；Context Size、Threads、
-  Threads Batch（-tb）、Batch Size、
+  Threads Batch（-tb）、Batch Size、ubatch-size（-ub）、
   GPU Layers（Auto 使用 llama.cpp 原生 `-ngl auto`）、Flash Attention 开关、
   KV Cache K/V 类型、`--cpu-moe` 与 `ncmoe`、MTP 投机解码
   （`--spec-type draft-mtp` + `--spec-draft-n-max`）、Host / Port / Alias、
-  额外自定义参数；高级模式（折叠面板）提供 ubatch-size、parallel、
+  额外自定义参数；高级模式（折叠面板）提供 parallel、
   continuous batching、no-mmap、mlock、no-warmup、cache-reuse、
   RoPE scaling / freq-scale、temp / top-k / top-p / min-p 默认采样参数；
   所有数值与下拉控件需点击聚焦后滚轮才生效，避免滚动页面时误改；
@@ -28,6 +28,11 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
   **预热请求（不计入结果）** → 发送固定 prompt 生成指定 token → 记录
   generation/prompt tok/s、显存峰值、功耗峰值、RAM 峰值、OOM / 启动失败 →
   关闭服务。结果表格按 generation tok/s 排名并标记最快配置，可导出 CSV。
+  另支持 **ASR 语音识别模型模式**（如 Qwen3-ASR-1.7B）：不以生成速度排名，
+  改用 **RTF（Real-Time Factor）= 音频时长 ÷ 识别耗时**（越大越好）；
+  参考音频（wav / flac）由用户放入指定目录（默认程序目录 `benchmark_audio/`），
+  音频经 `/v1/chat/completions` 的 `input_audio`（base64）发送，逐文件识别并
+  计时，先用首个文件预热一轮，表格按平均 RTF 排名。
 - **Logs**：QProcess 实时输出 stdout/stderr，按级别着色（错误红 / 警告黄 /
   性能绿 / 加载蓝），自动滚动可暂停，可保存。
 - **Presets**：多组 JSON 预设（默认含 Qwen35B Balanced / Max Speed /
@@ -72,7 +77,7 @@ main.py                入口
 ui/                    主题、自定义控件、五个页面、主窗口
 core/                  参数/命令构建、QProcess 进程管理、性能日志解析
 monitoring/            nvidia-smi GPU 监控、psutil 系统监控（线程，可降级）
-benchmark/             自定义参数扫描 Benchmark 执行器
+benchmark/             自定义参数扫描 Benchmark 执行器、ASR 音频时长解析（wav/flac）
 config/                配置持久化与预设管理
 widget/                翻译挂件（API 客户端 / 挂件窗体 / 挂件配置）
 tools/                 图标生成脚本

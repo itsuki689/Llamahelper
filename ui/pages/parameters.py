@@ -97,10 +97,12 @@ class ParametersPage(QWidget):
         self.spin_threads = self._spin(1, 64, 16, 1)
         self.spin_tb = self._spin_d(0, 64, 0, 1, "默认")
         self.spin_batch = self._spin(16, 32768, 1024, 16)
+        self.spin_ubatch = self._spin_d(0, 32768, 0, 16, "默认")
         tc.addLayout(self._row("Context Size (-c)", self.spin_ctx))
         tc.addLayout(self._row("Threads (-t)", self.spin_threads))
         tc.addLayout(self._row("Threads Batch (-tb)", self.spin_tb))
         tc.addLayout(self._row("Batch Size (-b)", self.spin_batch))
+        tc.addLayout(self._row("ubatch Size (-ub)", self.spin_ubatch))
 
         ngl_row = QHBoxLayout()
         ngl_lab = QLabel("GPU Layers (-ngl)")
@@ -169,10 +171,8 @@ class ParametersPage(QWidget):
         ac.setContentsMargins(16, 14, 16, 14)
         ac.setSpacing(10)
 
-        self.spin_ubatch = self._spin_d(0, 32768, 0, 16, "默认")
         self.spin_parallel = self._spin_d(0, 64, 0, 1, "auto")
         self.spin_cache_reuse = self._spin_d(0, 8192, 0, 16, "关闭")
-        ac.addLayout(self._row("ubatch Size (-ub)", self.spin_ubatch))
         ac.addLayout(self._row("Parallel Slots (-np)", self.spin_parallel))
         ac.addLayout(self._row("Cache Reuse", self.spin_cache_reuse))
 

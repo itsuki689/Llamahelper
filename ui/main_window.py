@@ -268,6 +268,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Benchmark", "\n".join(errors))
             self.benchmark.set_running(False)
             return
+        if job.mode == "asr":
+            from benchmark.audio import list_audio_files
+            if not list_audio_files(job.audio_dir):
+                QMessageBox.warning(
+                    self, "Benchmark",
+                    f"音频目录中没有 wav/flac 文件：\n{job.audio_dir}\n\n"
+                    "请先把参考音频放入该目录。")
+                self.benchmark.set_running(False)
+                return
         job.base_params = params
         self.app_config.save_params(params)
         self.benchmark.set_running(True)
