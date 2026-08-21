@@ -441,8 +441,6 @@ class TranslateWidget(QWidget):
                       center.y() - CIRCLE_BODY / 2,
                       CIRCLE_BODY, CIRCLE_BODY)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 90))
-        painter.drawEllipse(body.translated(0, 2).adjusted(-2, -2, 2, 2))
         painter.setBrush(QColor("#111113"))
         painter.drawEllipse(body)
         edge_pen = QPen(QColor(255, 255, 255, 115), 0.85)
@@ -463,9 +461,6 @@ class TranslateWidget(QWidget):
     def _paint_dock(self, painter: QPainter) -> None:
         body = QRectF(self.rect()).adjusted(2.5, 2.5, -2.5, -2.5)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 90))
-        painter.drawRoundedRect(body.translated(0, 1.5),
-                                body.width() / 2, body.width() / 2)
         painter.setBrush(QColor("#111113"))
         painter.drawRoundedRect(body, body.width() / 2, body.width() / 2)
         painter.setPen(QPen(QColor(255, 255, 255, 55), 1.0))
@@ -484,9 +479,6 @@ class TranslateWidget(QWidget):
             PAINT_MARGIN, PAINT_MARGIN, -PAINT_MARGIN, -PAINT_MARGIN)
         radius = body.height() / 2 if not self._result_multiline else 18.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 100))
-        painter.drawRoundedRect(body.translated(0, 2).adjusted(-1, -1, 1, 1),
-                                radius, radius)
         painter.setBrush(QColor("#111113"))
         painter.drawRoundedRect(body, radius, radius)
         painter.setPen(QPen(QColor(255, 255, 255, 105), 0.85))
