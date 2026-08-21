@@ -12,8 +12,16 @@ from PySide6.QtGui import (
     QMouseEvent, QPainter, QPaintEvent, QPen,
 )
 from PySide6.QtWidgets import QApplication, QToolTip, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView, QFrame, QLabel, QListWidget, QListWidgetItem,
+    QVBoxLayout,
+)
 
 from widget.api_client import DEFAULT_TRANSLATE_PROMPT, ChatWorker
+from widget.prompt_presets import (
+    active_prompt_name, normalize_prompt_presets, prompt_for_name,
+    save_prompt_presets,
+)
 from widget.settings import WidgetSettings
 
 
@@ -49,6 +57,62 @@ class ResultLayout:
     multiline: bool
 
 
+class PromptPresetPopup(QFrame):
+    """Scrollable Apple-style prompt picker used by the dock handle."""
+
+    preset_selected = Signal(str, str)
+
+    def __init__(self, presets: list[dict[str, str]], active_name: str,
+                 parent=None) -> None:
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedWidth(248)
+        self.setMaximumHeight(286)
+        self.setStyleSheet("""
+            QFrame#presetPopup {
+                background: #1C1C1E;
+                border: 1px solid #48484A;
+                border-radius: 14px;
+            }
+            QLabel { color: #98989D; font-size: 11px; padding: 4px 8px; }
+            QListWidget {
+                background: transparent; border: none; padding: 2px;
+                outline: none;
+            }
+            QListWidget::item {
+                color: #F2F2F7; padding: 9px 10px; border-radius: 8px;
+            }
+            QListWidget::item:hover { background: #3A3A3C; }
+            QListWidget::item:selected { background: #0A84FF; color: white; }
+        """)
+        self.setObjectName("presetPopup")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(3)
+        layout.addWidget(QLabel("选择提示词预设"))
+        self.list_widget = QListWidget()
+        self.list_widget.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel)
+        for preset in presets:
+            label = preset["name"] + (
+                "  · 当前" if preset["name"] == active_name else "")
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, preset)
+            self.list_widget.addItem(item)
+            if preset["name"] == active_name:
+                self.list_widget.setCurrentItem(item)
+        self.list_widget.itemClicked.connect(self._choose)
+        layout.addWidget(self.list_widget)
+        visible_rows = min(max(1, len(presets)), 7)
+        self.list_widget.setFixedHeight(visible_rows * 38 + 6)
+        self.adjustSize()
+
+    def _choose(self, item: QListWidgetItem) -> None:
+        preset = item.data(Qt.ItemDataRole.UserRole)
+        self.preset_selected.emit(preset["name"], preset["prompt"])
+        self.close()
+
+
 class TranslateWidget(QWidget):
     """Floating translation orb that docks to the left or right screen edge."""
 
@@ -75,7 +139,10 @@ class TranslateWidget(QWidget):
         self._dock_edge: str | None = None
         self._dock_screen_name = ""
         self._dock_offset = 0.2
-        self._system_prompt = saved.get("prompt") or DEFAULT_TRANSLATE_PROMPT
+        self._prompt_presets = normalize_prompt_presets(saved)
+        self._active_prompt_name = active_prompt_name(saved, self._prompt_presets)
+        self._system_prompt = prompt_for_name(
+            self._prompt_presets, self._active_prompt_name)
         self._worker: ChatWorker | None = None
         self._image: QImage | None = None
         self._result_text = ""
@@ -84,10 +151,14 @@ class TranslateWidget(QWidget):
         self._result_frame_inset = 5.0
         self._result_frame_width = 1.45
         self._result_frame_alpha = 232.0
+        self._result_frame_gray_progress = 0.0
         self._text_gray_progress = 0.0
+        self._result_text_hovered = False
         self._result_press_target: str | None = None
         self._ring_diameter = RING_IDLE
         self._stripe_length = STRIPE_IDLE
+        self._stripe_gray_progress = 0.0
+        self._preset_popup: PromptPresetPopup | None = None
         self._content_opacity = 0.0
         self._hovered = False
         self._drag_offset: QPoint | None = None
@@ -102,6 +173,18 @@ class TranslateWidget(QWidget):
         self._opacity_animation: QVariantAnimation | None = None
         self._result_frame_animation: QVariantAnimation | None = None
         self._text_color_animation: QVariantAnimation | None = None
+        self._result_gray_animation: QVariantAnimation | None = None
+        self._stripe_gray_animation: QVariantAnimation | None = None
+        self._result_gray_timer = QTimer(self)
+        self._result_gray_timer.setSingleShot(True)
+        self._result_gray_timer.setInterval(1000)
+        self._result_gray_timer.timeout.connect(
+            lambda: self._animate_result_frame_gray(0.0))
+        self._stripe_gray_timer = QTimer(self)
+        self._stripe_gray_timer.setSingleShot(True)
+        self._stripe_gray_timer.setInterval(1000)
+        self._stripe_gray_timer.timeout.connect(
+            lambda: self._animate_stripe_gray(0.0))
         self._processing_pulse = QTimer(self)
         self._processing_pulse.setInterval(460)
         self._processing_pulse.timeout.connect(self._pulse_processing_ring)
@@ -135,14 +218,48 @@ class TranslateWidget(QWidget):
 
     @property
     def result_text_copied(self) -> bool:
-        return self._text_gray_progress >= 0.99
+        return self._result_frame_gray_progress >= 0.99
+
+    @property
+    def active_prompt_name(self) -> str:
+        return self._active_prompt_name
+
+    @property
+    def preset_feedback_active(self) -> bool:
+        return self._stripe_gray_progress >= 0.99
 
     def set_base_url(self, url: str) -> None:
         self.base_url = url
 
     def set_system_prompt(self, prompt: str) -> None:
+        self._reload_prompt_presets()
         self._system_prompt = prompt.strip() or DEFAULT_TRANSLATE_PROMPT
-        self._save_settings()
+        for preset in self._prompt_presets:
+            if preset["name"] == self._active_prompt_name:
+                preset["prompt"] = self._system_prompt
+                break
+        save_prompt_presets(
+            self.settings, self._prompt_presets, self._active_prompt_name)
+
+    def apply_prompt_preset(self, name: str, prompt: str,
+                            feedback: bool = False) -> None:
+        name = name.strip()
+        prompt = prompt.strip()
+        if not name or not prompt:
+            return
+        data = self.settings.load()
+        self._prompt_presets = normalize_prompt_presets(data)
+        existing = next((item for item in self._prompt_presets
+                         if item["name"] == name), None)
+        if existing is None:
+            self._prompt_presets.append({"name": name, "prompt": prompt})
+        else:
+            existing["prompt"] = prompt
+        self._active_prompt_name = name
+        self._system_prompt = prompt
+        save_prompt_presets(self.settings, self._prompt_presets, name)
+        if feedback:
+            self._flash_stripe_gray()
 
     def translate(self, text: str = "", image: QImage | None = None) -> bool:
         if not text.strip() and image is None:
@@ -237,25 +354,75 @@ class TranslateWidget(QWidget):
             self._result_frame_animation.stop()
         if self._text_color_animation is not None:
             self._text_color_animation.stop()
+        if self._result_gray_animation is not None:
+            self._result_gray_animation.stop()
+        self._result_gray_timer.stop()
         self._result_frame_inset = 5.0
         self._result_frame_width = 1.45
         self._result_frame_alpha = 232.0
+        self._result_frame_gray_progress = 0.0
         self._text_gray_progress = 0.0
+        self._result_text_hovered = False
         self._result_press_target = None
 
     def _copy_result_to_clipboard(self) -> None:
         if self._mode != MODE_RESULT or not self._result_text:
             return
         QApplication.clipboard().setText(self._result_text)
+        self._flash_result_frame_gray()
+
+    def _animate_text_hover(self, hovered: bool) -> None:
+        if self._result_text_hovered == hovered:
+            return
+        self._result_text_hovered = hovered
         if self._text_color_animation is not None:
             self._text_color_animation.stop()
         animation = QVariantAnimation(self)
-        animation.setDuration(170)
+        animation.setDuration(150)
         animation.setStartValue(self._text_gray_progress)
-        animation.setEndValue(1.0)
+        animation.setEndValue(1.0 if hovered else 0.0)
         animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         animation.valueChanged.connect(self._set_text_gray_progress)
         self._text_color_animation = animation
+        animation.start()
+
+    def _flash_result_frame_gray(self) -> None:
+        self._result_gray_timer.stop()
+        if self._result_gray_animation is not None:
+            self._result_gray_animation.stop()
+        self._set_result_frame_gray_progress(1.0)
+        self._result_gray_timer.start()
+
+    def _animate_result_frame_gray(self, target: float,
+                                   duration: int = 180) -> None:
+        if self._result_gray_animation is not None:
+            self._result_gray_animation.stop()
+        animation = QVariantAnimation(self)
+        animation.setDuration(duration)
+        animation.setStartValue(self._result_frame_gray_progress)
+        animation.setEndValue(target)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._set_result_frame_gray_progress)
+        self._result_gray_animation = animation
+        animation.start()
+
+    def _flash_stripe_gray(self) -> None:
+        self._stripe_gray_timer.stop()
+        if self._stripe_gray_animation is not None:
+            self._stripe_gray_animation.stop()
+        self._set_stripe_gray_progress(1.0)
+        self._stripe_gray_timer.start()
+
+    def _animate_stripe_gray(self, target: float, duration: int = 180) -> None:
+        if self._stripe_gray_animation is not None:
+            self._stripe_gray_animation.stop()
+        animation = QVariantAnimation(self)
+        animation.setDuration(duration)
+        animation.setStartValue(self._stripe_gray_progress)
+        animation.setEndValue(target)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._set_stripe_gray_progress)
+        self._stripe_gray_animation = animation
         animation.start()
 
     def _press_result_frame_and_collapse(self) -> None:
@@ -397,6 +564,41 @@ class TranslateWidget(QWidget):
             self._save_settings()
         self.update()
 
+    def _reload_prompt_presets(self) -> None:
+        data = self.settings.load()
+        self._prompt_presets = normalize_prompt_presets(data)
+        self._active_prompt_name = active_prompt_name(
+            data, self._prompt_presets)
+        self._system_prompt = prompt_for_name(
+            self._prompt_presets, self._active_prompt_name)
+
+    def _show_preset_popup(self, global_pos: QPoint) -> None:
+        if self._mode != MODE_DOCKED:
+            return
+        self._reload_prompt_presets()
+        popup = PromptPresetPopup(
+            self._prompt_presets, self._active_prompt_name, self)
+        popup.preset_selected.connect(
+            lambda name, prompt: self.apply_prompt_preset(
+                name, prompt, feedback=True))
+        popup.destroyed.connect(lambda: setattr(self, "_preset_popup", None))
+        self._preset_popup = popup
+        popup.adjustSize()
+        screen = QGuiApplication.screenAt(global_pos) or self._screen_for_widget()
+        available = screen.availableGeometry()
+        if self._dock_edge == "right":
+            x = self.geometry().left() - popup.width() - 8
+        else:
+            x = self.geometry().right() + 8
+        y = global_pos.y() - popup.height() // 2
+        x = max(available.left() + 8,
+                min(x, available.right() - popup.width() - 7))
+        y = max(available.top() + 8,
+                min(y, available.bottom() - popup.height() - 7))
+        popup.move(x, y)
+        popup.show()
+        popup.raise_()
+
     @staticmethod
     def _dock_geometry(screen, edge: str, offset: float) -> QRect:
         available = screen.availableGeometry()
@@ -498,6 +700,14 @@ class TranslateWidget(QWidget):
         self._text_gray_progress = float(value)
         self.update()
 
+    def _set_result_frame_gray_progress(self, value) -> None:
+        self._result_frame_gray_progress = float(value)
+        self.update()
+
+    def _set_stripe_gray_progress(self, value) -> None:
+        self._stripe_gray_progress = float(value)
+        self.update()
+
     def _set_result_frame_press_progress(self, value) -> None:
         progress = float(value)
         self._result_frame_inset = 5.0 + 4.0 * progress
@@ -554,7 +764,13 @@ class TranslateWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(body, body.width() / 2, body.width() / 2)
         center = body.center()
-        stripe = QPen(QColor(255, 255, 255, 235), 2.0)
+        stripe_gray = self._stripe_gray_progress
+        stripe = QPen(QColor(
+            round(255 + (142 - 255) * stripe_gray),
+            round(255 + (142 - 255) * stripe_gray),
+            round(255 + (147 - 255) * stripe_gray),
+            235,
+        ), 2.0)
         stripe.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(stripe)
         half = min(self._stripe_length, body.height() - 18) / 2
@@ -575,10 +791,13 @@ class TranslateWidget(QWidget):
         inset = self._result_frame_inset
         inner = body.adjusted(inset, inset, -inset, -inset)
         inner_radius = inner.height() / 2 if not self._result_multiline else 13.0
-        painter.setPen(QPen(
-            QColor(255, 255, 255, round(self._result_frame_alpha)),
-            self._result_frame_width,
-        ))
+        frame_gray = self._result_frame_gray_progress
+        painter.setPen(QPen(QColor(
+            round(255 + (142 - 255) * frame_gray),
+            round(255 + (142 - 255) * frame_gray),
+            round(255 + (147 - 255) * frame_gray),
+            round(self._result_frame_alpha),
+        ), self._result_frame_width))
         painter.drawRoundedRect(inner, inner_radius, inner_radius)
         alpha = max(0, min(255, round(255 * self._content_opacity)))
         gray = self._text_gray_progress
@@ -646,6 +865,8 @@ class TranslateWidget(QWidget):
     def leaveEvent(self, event) -> None:
         self._hovered = False
         self.unsetCursor()
+        if self._mode == MODE_RESULT:
+            self._animate_text_hover(False)
         if self._mode == MODE_IDLE:
             self._animate_ring(RING_IDLE)
         elif self._mode == MODE_DOCKED:
@@ -682,6 +903,8 @@ class TranslateWidget(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._mode == MODE_RESULT and not event.buttons():
+            self._animate_text_hover(
+                self._result_text_hit_rect().contains(event.position()))
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             event.accept()
             return
@@ -703,7 +926,9 @@ class TranslateWidget(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.RightButton:
-            if self._mode != MODE_COLLAPSING:
+            if self._mode == MODE_DOCKED:
+                self._show_preset_popup(event.globalPosition().toPoint())
+            elif self._mode != MODE_COLLAPSING:
                 self.paste_clipboard()
             event.accept()
             return
@@ -765,14 +990,15 @@ class TranslateWidget(QWidget):
         else:
             circle = self._circle_geometry(self._anchor_center)
             pos = [circle.x(), circle.y()]
-        self.settings.save({
-            "prompt": self._system_prompt,
+        data = self.settings.load()
+        data.update({
             "pos": pos,
             "mode": MODE_DOCKED if self._mode == MODE_DOCKED else MODE_IDLE,
             "edge": self._dock_edge,
             "screen": self._dock_screen_name,
             "edge_offset": self._dock_offset,
         })
+        self.settings.save(data)
 
     def closeEvent(self, event) -> None:
         self._processing_pulse.stop()

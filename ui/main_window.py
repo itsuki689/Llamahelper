@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.health_checker: ApiHealthChecker | None = None
         self.bench_runner: BenchmarkRunner | None = None
         self._translate_widget = None
+        self._translate_settings_dialog = None
 
         # ---- UI ----
         self._build_ui()
@@ -128,6 +129,10 @@ class MainWindow(QMainWindow):
         self.btn_widget.setObjectName("navBtn")
         self.btn_widget.clicked.connect(self.open_translate_widget)
         sb.addWidget(self.btn_widget)
+        self.btn_widget_settings = QPushButton("挂件设置")
+        self.btn_widget_settings.setObjectName("navBtn")
+        self.btn_widget_settings.clicked.connect(self.open_translate_settings)
+        sb.addWidget(self.btn_widget_settings)
 
         # 页面
         self.dashboard = DashboardPage()
@@ -167,6 +172,30 @@ class MainWindow(QMainWindow):
         if self._translate_widget:
             self._translate_widget.deleteLater()
             self._translate_widget = None
+
+    def open_translate_settings(self) -> None:
+        """Open the prompt preset editor used by the desktop widget."""
+        from widget.settings_dialog import PromptSettingsDialog
+
+        if self._translate_settings_dialog is None:
+            dialog = PromptSettingsDialog(parent=self)
+            dialog.prompt_applied.connect(self._on_widget_prompt_applied)
+            dialog.finished.connect(self._on_translate_settings_closed)
+            self._translate_settings_dialog = dialog
+        else:
+            self._translate_settings_dialog.reload()
+        self._translate_settings_dialog.show()
+        self._translate_settings_dialog.raise_()
+        self._translate_settings_dialog.activateWindow()
+
+    def _on_widget_prompt_applied(self, name: str, prompt: str) -> None:
+        if self._translate_widget is not None:
+            self._translate_widget.apply_prompt_preset(name, prompt)
+
+    def _on_translate_settings_closed(self) -> None:
+        if self._translate_settings_dialog is not None:
+            self._translate_settings_dialog.deleteLater()
+            self._translate_settings_dialog = None
 
     # ------------------------------------------------------------------
     def _wire_signals(self) -> None:

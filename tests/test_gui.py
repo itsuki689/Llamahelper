@@ -34,7 +34,7 @@ def qapp():
     yield app
 
 
-def test_app_icon_exists_and_loads():
+def test_app_icon_exists_and_loads(qapp):
     from PySide6.QtGui import QIcon
 
     from main import resource_path
@@ -55,6 +55,23 @@ def test_main_window_opens_dockable_translation_widget(window, qapp):
     window._translate_widget.close()
     qapp.processEvents()
     assert window._translate_widget is None
+
+
+def test_main_window_opens_translation_settings(
+        window, qapp, tmp_path, monkeypatch):
+    import widget.settings_dialog as settings_dialog
+    from widget.settings import WidgetSettings
+
+    settings = WidgetSettings(tmp_path / "widget.json")
+    monkeypatch.setattr(settings_dialog, "WidgetSettings", lambda: settings)
+    window.open_translate_settings()
+    qapp.processEvents()
+    dialog = window._translate_settings_dialog
+    assert dialog is not None
+    assert dialog.preset_list.count() == 1
+    dialog.close()
+    qapp.processEvents()
+    assert window._translate_settings_dialog is None
 
 
 def test_main_window_pages(window):

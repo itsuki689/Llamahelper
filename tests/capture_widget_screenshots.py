@@ -18,9 +18,11 @@ from PySide6.QtWidgets import QApplication
 
 from ui.theme import APP_QSS, FONT_STACK
 from widget.settings import WidgetSettings
+from widget.prompt_presets import save_prompt_presets
+from widget.settings_dialog import PromptSettingsDialog
 from widget.dockable_translate_widget import (
     MODE_PROCESSING, MODE_RESULT, RING_HOVER, RING_PROCESSING_SMALL,
-    STRIPE_HOVER, TranslateWidget,
+    STRIPE_HOVER, PromptPresetPopup, TranslateWidget,
 )
 
 
@@ -78,6 +80,28 @@ def main() -> int:
             QFontDatabase.addApplicationFont(str(font_path))
     app.setStyleSheet(APP_QSS.replace(FONT_STACK, '"Microsoft YaHei UI"'))
 
+    dialog_settings = WidgetSettings(settings_dir / "dialog.json")
+    save_prompt_presets(dialog_settings, [
+        {"name": "默认翻译", "prompt": "Detect the language and translate it."},
+        {"name": "技术文档", "prompt": "Translate technical documentation precisely."},
+        {"name": "日语翻译", "prompt": "Translate between Japanese and Chinese."},
+    ], "技术文档")
+    settings_dialog = PromptSettingsDialog(dialog_settings)
+    settings_dialog.show()
+    app.processEvents()
+    settings_dialog.grab().save(str(OUTPUT_DIR / "translation_settings.png"))
+    settings_dialog.close()
+
+    popup_presets = [
+        {"name": f"提示词预设 {index}", "prompt": f"Prompt {index}"}
+        for index in range(1, 11)
+    ]
+    preset_popup = PromptPresetPopup(popup_presets, "提示词预设 3")
+    preset_popup.show()
+    app.processEvents()
+    preset_popup.grab().save(str(OUTPUT_DIR / "translation_preset_popup.png"))
+    preset_popup.close()
+
     idle = TranslateWidget(
         "http://127.0.0.1:1/v1", WidgetSettings(settings_dir / "idle.json")
     )
@@ -119,6 +143,10 @@ def main() -> int:
     docked._animate_stripe(STRIPE_HOVER, 1)
     process_until(app, lambda: abs(docked.stripe_length - STRIPE_HOVER) < 0.1)
     save_widget(app, docked, "translation_docked_hover.png")
+    docked.apply_prompt_preset(
+        "技术文档", "Translate technical documentation precisely.", feedback=True)
+    process_until(app, lambda: docked.preset_feedback_active)
+    save_widget(app, docked, "translation_docked_selected.png")
     docked.close()
 
     port = reserve_port()
@@ -145,6 +173,8 @@ def main() -> int:
         if not ok:
             raise RuntimeError("Translation result did not arrive")
         save_widget(app, translated, "translation_short_result.png")
+        translated._animate_text_hover(True)
+        process_until(app, lambda: translated._text_gray_progress > 0.99)
         translated._copy_result_to_clipboard()
         process_until(app, lambda: translated.result_text_copied)
         save_widget(app, translated, "translation_copied.png")

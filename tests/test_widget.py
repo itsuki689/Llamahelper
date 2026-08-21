@@ -14,7 +14,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QAbstractAnimation, QPoint, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QAbstractItemView
 
 from widget.api_client import (DEFAULT_TRANSLATE_PROMPT, ChatWorker,
                                build_chat_payload, extract_reply,
@@ -22,8 +22,13 @@ from widget.api_client import (DEFAULT_TRANSLATE_PROMPT, ChatWorker,
 from widget.settings import WidgetSettings
 from widget.dockable_translate_widget import (
     CIRCLE_WINDOW, DOCK_HEIGHT, DOCK_WIDTH, MODE_DOCKED, MODE_IDLE,
-    MODE_PROCESSING, MODE_RESULT, RING_HOVER, STRIPE_HOVER, TranslateWidget,
+    MODE_PROCESSING, MODE_RESULT, PromptPresetPopup, RING_HOVER,
+    STRIPE_HOVER, TranslateWidget,
 )
+from widget.prompt_presets import (
+    active_prompt_name, normalize_prompt_presets, save_prompt_presets,
+)
+from widget.settings_dialog import PromptSettingsDialog
 
 FAKE_SERVER = Path(__file__).parent / "fake_llama_server.py"
 
@@ -49,6 +54,52 @@ def make_image(color=(200, 30, 30)) -> QImage:
     img = QImage(64, 48, QImage.Format.Format_RGB32)
     img.fill(QColor(*color))
     return img
+
+
+def test_prompt_presets_migrate_and_persist(tmp_path):
+    settings = WidgetSettings(tmp_path / "w.json")
+    settings.save({"prompt": "旧版自定义提示词", "pos": [1, 2]})
+    presets = normalize_prompt_presets(settings.load())
+    assert presets == [{"name": "默认翻译", "prompt": "旧版自定义提示词"}]
+    presets.append({"name": "日语翻译", "prompt": "Translate Japanese."})
+    save_prompt_presets(settings, presets, "日语翻译")
+    saved = settings.load()
+    assert active_prompt_name(saved, presets) == "日语翻译"
+    assert saved["prompt"] == "Translate Japanese."
+    assert saved["pos"] == [1, 2]
+
+
+def test_prompt_settings_dialog_saves_and_applies(qapp, tmp_path):
+    settings = WidgetSettings(tmp_path / "w.json")
+    dialog = PromptSettingsDialog(settings)
+    widget = TranslateWidget("http://127.0.0.1:1/v1", settings)
+    applied = []
+    dialog.prompt_applied.connect(
+        lambda name, prompt: applied.append((name, prompt)))
+    dialog.prompt_applied.connect(widget.apply_prompt_preset)
+    dialog._new_preset()
+    dialog.name_edit.setText("技术文档")
+    dialog.prompt_edit.setPlainText("Translate technical documentation.")
+    dialog._save_current()
+    assert dialog.active_name == "技术文档"
+    assert applied == [("技术文档", "Translate technical documentation.")]
+    assert settings.load()["active_prompt_preset"] == "技术文档"
+    assert widget.active_prompt_name == "技术文档"
+    assert widget._system_prompt == "Translate technical documentation."
+    default_item = next(
+        dialog.preset_list.item(index)
+        for index in range(dialog.preset_list.count())
+        if dialog.preset_list.item(index).data(Qt.ItemDataRole.UserRole)
+        == "默认翻译"
+    )
+    dialog.preset_list.setCurrentItem(default_item)
+    dialog._delete_selected()
+    assert "默认翻译" not in {
+        item["name"] for item in settings.load()["prompt_presets"]}
+    dialog.close()
+    widget.close()
+    assert "默认翻译" not in {
+        item["name"] for item in settings.load()["prompt_presets"]}
 
 
 # ---------------------------------------------------------------------
@@ -174,16 +225,30 @@ def test_long_result_expands_downward(qapp, tmp_path):
     w.close()
 
 
-def test_result_text_click_copies_and_turns_gray(qapp, tmp_path):
+def test_result_text_hover_grays_and_recovers(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.show()
+    w._show_result("悬停这段翻译")
+    assert pump_until(lambda: w.mode == MODE_RESULT
+                      and w._content_opacity > 0.99
+                      and w._geometry_animation.state()
+                      == QAbstractAnimation.State.Stopped)
+    QTest.mouseMove(w, w._result_text_hit_rect().center().toPoint())
+    assert pump_until(lambda: w._text_gray_progress > 0.99)
+    QTest.mouseMove(w, QPoint(11, w.height() // 2))
+    assert pump_until(lambda: w._text_gray_progress < 0.01)
+    w.close()
+
+
+def test_result_text_click_copies_and_flashes_frame_gray(qapp, tmp_path):
     w = TranslateWidget("http://127.0.0.1:1/v1",
                         WidgetSettings(tmp_path / "w.json"))
     w.show()
     w._show_result("复制这段翻译")
     assert pump_until(lambda: w.mode == MODE_RESULT
-                      and w._content_opacity > 0.99
                       and w._geometry_animation.state()
                       == QAbstractAnimation.State.Stopped)
-    original_pos = w.pos()
     QApplication.clipboard().clear()
     QTest.mouseClick(
         w,
@@ -192,7 +257,8 @@ def test_result_text_click_copies_and_turns_gray(qapp, tmp_path):
     )
     assert QApplication.clipboard().text() == "复制这段翻译"
     assert pump_until(lambda: w.result_text_copied)
-    assert w.mode == MODE_RESULT and w.pos() == original_pos
+    assert pump_until(lambda: not w.result_text_copied, timeout=2.0)
+    assert w.mode == MODE_RESULT
     w.close()
 
 
@@ -248,6 +314,46 @@ def test_dock_handle_hover_and_click_target(qapp, tmp_path):
                       and w.width() == CIRCLE_WINDOW
                       and w.height() == CIRCLE_WINDOW)
     assert w.dock_edge is None
+    w.close()
+
+
+def test_dock_right_click_only_opens_scrollable_presets(
+        qapp, tmp_path, monkeypatch):
+    settings = WidgetSettings(tmp_path / "w.json")
+    presets = [{"name": f"预设 {i}", "prompt": f"Prompt {i}"}
+               for i in range(12)]
+    save_prompt_presets(settings, presets, "预设 0")
+    w = TranslateWidget("http://127.0.0.1:1/v1", settings)
+    w.dock_to("right", animate=False)
+    w.show()
+    shown = []
+    pasted = []
+    monkeypatch.setattr(w, "_show_preset_popup",
+                        lambda pos: shown.append(pos))
+    monkeypatch.setattr(w, "paste_clipboard",
+                        lambda: pasted.append(True) or True)
+    QTest.mouseClick(w, Qt.MouseButton.RightButton)
+    assert len(shown) == 1 and not pasted
+    assert w.mode == MODE_DOCKED
+
+    popup = PromptPresetPopup(presets, "预设 0")
+    assert popup.list_widget.count() == 12
+    assert (popup.list_widget.verticalScrollMode()
+            == QAbstractItemView.ScrollMode.ScrollPerPixel)
+    popup.close()
+    w.close()
+
+
+def test_dock_preset_selection_flashes_stripe_gray(qapp, tmp_path):
+    settings = WidgetSettings(tmp_path / "w.json")
+    w = TranslateWidget("http://127.0.0.1:1/v1", settings)
+    w.dock_to("left", animate=False)
+    w.apply_prompt_preset("简洁翻译", "Translate concisely.", feedback=True)
+    assert w.active_prompt_name == "简洁翻译"
+    assert w._system_prompt == "Translate concisely."
+    assert pump_until(lambda: w.preset_feedback_active)
+    assert pump_until(lambda: not w.preset_feedback_active, timeout=2.0)
+    assert settings.load()["active_prompt_preset"] == "简洁翻译"
     w.close()
 
 
