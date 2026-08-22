@@ -34,7 +34,7 @@ def qapp():
     yield app
 
 
-def test_app_icon_exists_and_loads():
+def test_app_icon_exists_and_loads(qapp):
     from PySide6.QtGui import QIcon
 
     from main import resource_path
@@ -43,8 +43,34 @@ def test_app_icon_exists_and_loads():
     assert not QIcon(str(icon_path)).isNull()
 
 
+def test_main_window_opens_dockable_translation_widget(window, qapp):
+    from widget.dockable_translate_widget import (
+        MODE_DOCKED, MODE_IDLE, TranslateWidget,
+    )
+
+    window.open_translate_settings()
+    window.translation_widget_page.btn_launch.click()
+    qapp.processEvents()
+    assert isinstance(window._translate_widget, TranslateWidget)
+    assert window._translate_widget.mode in {MODE_IDLE, MODE_DOCKED}
+    window._translate_widget.close()
+    qapp.processEvents()
+    assert window._translate_widget is None
+
+
+def test_main_window_opens_translation_settings(
+        window, qapp):
+    window.open_translate_settings()
+    qapp.processEvents()
+    page = window.translation_widget_page
+    assert window.stack.currentWidget() is page
+    assert window.nav_buttons[5].isChecked()
+    assert page.preset_list.count() >= 1
+    assert page.btn_launch.text() == "启动挂件"
+
+
 def test_main_window_pages(window):
-    assert window.stack.count() == 5
+    assert window.stack.count() == 6
     window._switch_page(2)
     assert window.stack.currentWidget() is window.benchmark
     assert window.nav_buttons[2].isChecked()

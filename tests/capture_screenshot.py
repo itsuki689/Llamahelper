@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 import ui.main_window as mw
@@ -22,8 +23,16 @@ mw.AppConfig = lambda: AppConfig(tmp / "cfg.json")          # noqa: E731
 mw.PresetManager = lambda: PresetManager(tmp / "presets.json")  # noqa: E731
 
 app = QApplication([])
-from ui.theme import APP_QSS
-app.setStyleSheet(APP_QSS)
+from ui.theme import APP_QSS, FONT_STACK
+for font_path in (
+    Path("C:/Windows/Fonts/segoeui.ttf"),
+    Path("C:/Windows/Fonts/segoeuib.ttf"),
+    Path("C:/Windows/Fonts/msyh.ttc"),
+    Path("C:/Windows/Fonts/msyhbd.ttc"),
+):
+    if font_path.is_file():
+        QFontDatabase.addApplicationFont(str(font_path))
+app.setStyleSheet(APP_QSS.replace(FONT_STACK, '"Microsoft YaHei UI"'))
 
 win = mw.MainWindow()
 win.resize(1180, 780)
@@ -55,7 +64,7 @@ out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp")
 
 def grab_all() -> None:
     for i, name in enumerate(["dashboard", "parameters", "benchmark",
-                              "logs", "presets"]):
+                              "logs", "presets", "translation_widget"]):
         win._switch_page(i)
         if name == "parameters":
             win.parameters.btn_advanced.setChecked(True)  # 展开高级参数

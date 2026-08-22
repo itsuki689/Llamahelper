@@ -24,6 +24,7 @@ from ui.pages.dashboard import DashboardPage
 from ui.pages.logs_page import LogsPage
 from ui.pages.parameters import ParametersPage
 from ui.pages.presets_page import PresetsPage
+from ui.pages.translation_widget_page import TranslationWidgetPage
 
 
 class ApiHealthChecker(QThread):
@@ -59,7 +60,8 @@ class ApiHealthChecker(QThread):
 
 class MainWindow(QMainWindow):
     NAV = [("Dashboard", "仪表盘"), ("Parameters", "参数"),
-           ("Benchmark", "性能测试"), ("Logs", "日志"), ("Presets", "预设")]
+           ("Benchmark", "性能测试"), ("Logs", "日志"), ("Presets", "预设"),
+           ("TranslationWidget", "翻译挂件")]
 
     def __init__(self) -> None:
         super().__init__()
@@ -123,11 +125,6 @@ class MainWindow(QMainWindow):
             sb.addWidget(btn)
             self.nav_buttons.append(btn)
         sb.addStretch(1)
-        # 翻译挂件入口
-        self.btn_widget = QPushButton("翻译挂件")
-        self.btn_widget.setObjectName("navBtn")
-        self.btn_widget.clicked.connect(self.open_translate_widget)
-        sb.addWidget(self.btn_widget)
 
         # 页面
         self.dashboard = DashboardPage()
@@ -135,8 +132,9 @@ class MainWindow(QMainWindow):
         self.benchmark = BenchmarkPage()
         self.logs = LogsPage()
         self.presets = PresetsPage(self.preset_manager)
+        self.translation_widget_page = TranslationWidgetPage()
         for p in (self.dashboard, self.parameters, self.benchmark,
-                  self.logs, self.presets):
+                  self.logs, self.presets, self.translation_widget_page):
             self.stack.addWidget(p)
 
         lay.addWidget(sidebar)
@@ -150,7 +148,7 @@ class MainWindow(QMainWindow):
 
     def open_translate_widget(self) -> None:
         """启动/唤起翻译挂件，跟随当前参数页的 host/port。"""
-        from widget.translate_widget import TranslateWidget
+        from widget.dockable_translate_widget import TranslateWidget
 
         p = self.parameters.get_params()
         url = p.api_base_url() + "/v1"
@@ -162,11 +160,24 @@ class MainWindow(QMainWindow):
         self._translate_widget.show()
         self._translate_widget.raise_()
         self._translate_widget.activateWindow()
+        self.translation_widget_page.set_widget_running(True)
 
     def _on_widget_closed(self) -> None:
         if self._translate_widget:
             self._translate_widget.deleteLater()
             self._translate_widget = None
+        self.translation_widget_page.set_widget_running(False)
+
+    def open_translate_settings(self) -> None:
+        """兼容旧入口：切换到翻译挂件全页设置。"""
+        index = next(i for i, item in enumerate(self.NAV)
+                     if item[0] == "TranslationWidget")
+        self.translation_widget_page.reload()
+        self._switch_page(index)
+
+    def _on_widget_prompt_applied(self, name: str, prompt: str) -> None:
+        if self._translate_widget is not None:
+            self._translate_widget.apply_prompt_preset(name, prompt)
 
     # ------------------------------------------------------------------
     def _wire_signals(self) -> None:
@@ -186,6 +197,11 @@ class MainWindow(QMainWindow):
         # 预设
         self.presets.apply_requested.connect(self._apply_preset)
         self.presets.save_requested.connect(self._save_preset)
+        # 翻译挂件页面
+        self.translation_widget_page.launch_requested.connect(
+            self.open_translate_widget)
+        self.translation_widget_page.prompt_applied.connect(
+            self._on_widget_prompt_applied)
         # Benchmark
         self.benchmark.run_requested.connect(self._start_benchmark)
         self.benchmark.stop_requested.connect(self._stop_benchmark)

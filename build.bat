@@ -9,6 +9,13 @@ if not exist .venv (
 )
 call .venv\Scripts\activate.bat
 
+rem A venv created from Conda keeps native dependencies in base_prefix\Library\bin.
+rem Add those locations so PyInstaller can bundle OpenSSL, lzma, bz2, expat and ffi.
+for /f "usebackq delims=" %%I in (`python -c "import sys; print(sys.base_prefix)"`) do set "PY_BASE=%%I"
+if exist "%PY_BASE%\Library\bin" set "PATH=%PY_BASE%\Library\bin;%PY_BASE%\DLLs;%PATH%"
+set "EXTRA_BINARIES="
+if exist "%PY_BASE%\Library\bin\libcrypto-3-x64.dll" set EXTRA_BINARIES=--add-binary "%PY_BASE%\Library\bin\libcrypto-3-x64.dll;." --add-binary "%PY_BASE%\Library\bin\libssl-3-x64.dll;." --add-binary "%PY_BASE%\Library\bin\liblzma.dll;." --add-binary "%PY_BASE%\Library\bin\libbz2.dll;." --add-binary "%PY_BASE%\Library\bin\libexpat.dll;." --add-binary "%PY_BASE%\Library\bin\ffi.dll;."
+
 echo [build] 安装依赖 ...
 python -m pip install --upgrade pip
 pip install -r requirements.txt
@@ -19,7 +26,7 @@ pyinstaller --noconfirm --clean ^
     --name LlamaHelper ^
     --icon assets/icon.ico ^
     --add-data "assets;assets" ^
-    --collect-submodules psutil ^
+    %EXTRA_BINARIES% ^
     main.py
 
 if errorlevel 1 (
