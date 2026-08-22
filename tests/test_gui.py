@@ -48,7 +48,8 @@ def test_main_window_opens_dockable_translation_widget(window, qapp):
         MODE_DOCKED, MODE_IDLE, TranslateWidget,
     )
 
-    window.open_translate_widget()
+    window.open_translate_settings()
+    window.translation_widget_page.btn_launch.click()
     qapp.processEvents()
     assert isinstance(window._translate_widget, TranslateWidget)
     assert window._translate_widget.mode in {MODE_IDLE, MODE_DOCKED}
@@ -58,24 +59,18 @@ def test_main_window_opens_dockable_translation_widget(window, qapp):
 
 
 def test_main_window_opens_translation_settings(
-        window, qapp, tmp_path, monkeypatch):
-    import widget.settings_dialog as settings_dialog
-    from widget.settings import WidgetSettings
-
-    settings = WidgetSettings(tmp_path / "widget.json")
-    monkeypatch.setattr(settings_dialog, "WidgetSettings", lambda: settings)
+        window, qapp):
     window.open_translate_settings()
     qapp.processEvents()
-    dialog = window._translate_settings_dialog
-    assert dialog is not None
-    assert dialog.preset_list.count() == 1
-    dialog.close()
-    qapp.processEvents()
-    assert window._translate_settings_dialog is None
+    page = window.translation_widget_page
+    assert window.stack.currentWidget() is page
+    assert window.nav_buttons[5].isChecked()
+    assert page.preset_list.count() >= 1
+    assert page.btn_launch.text() == "启动挂件"
 
 
 def test_main_window_pages(window):
-    assert window.stack.count() == 5
+    assert window.stack.count() == 6
     window._switch_page(2)
     assert window.stack.currentWidget() is window.benchmark
     assert window.nav_buttons[2].isChecked()

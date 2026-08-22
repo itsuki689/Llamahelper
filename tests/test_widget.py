@@ -18,7 +18,8 @@ from PySide6.QtWidgets import QApplication, QAbstractItemView
 
 from widget.api_client import (DEFAULT_TRANSLATE_PROMPT, ChatWorker,
                                build_chat_payload, extract_reply,
-                               image_to_data_url)
+                               image_to_data_url,
+                               looks_like_untranslated_english)
 from widget.settings import WidgetSettings
 from widget.dockable_translate_widget import (
     CIRCLE_WINDOW, DOCK_HEIGHT, DOCK_WIDTH, MODE_DOCKED, MODE_IDLE,
@@ -117,6 +118,61 @@ def test_payload_with_image():
     assert content[0]["type"] == "image_url"
     assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
     assert content[1]["text"] == "翻译这张图"
+    assert "Simplified Chinese" in p["messages"][0]["content"]
+    assert "简体中文" in content[-1]["text"]
+
+
+def test_image_english_reply_is_retried_once(qapp, monkeypatch):
+    worker = ChatWorker(
+        "http://127.0.0.1:1/v1", DEFAULT_TRANSLATE_PROMPT, "", make_image())
+    calls = []
+    replies = iter([
+        "Oops, Connection Problem Detected. Please reload the page.",
+        "检测到连接问题，请重新加载页面。",
+    ])
+    monkeypatch.setattr(
+        worker, "_request",
+        lambda image_retry: calls.append(image_retry) or next(replies),
+    )
+    results = []
+    worker.result.connect(results.append)
+    worker.run()
+    assert calls == [False, True]
+    assert results == ["检测到连接问题，请重新加载页面。"]
+
+
+def test_chinese_image_reply_does_not_retry(qapp, monkeypatch):
+    worker = ChatWorker(
+        "http://127.0.0.1:1/v1", DEFAULT_TRANSLATE_PROMPT, "", make_image())
+    calls = []
+    monkeypatch.setattr(
+        worker, "_request",
+        lambda image_retry: calls.append(image_retry) or "这是完整的中文翻译结果。",
+    )
+    worker.run()
+    assert calls == [False]
+    assert looks_like_untranslated_english(
+        "Something is stopping this page from loading. Please retry.")
+    assert not looks_like_untranslated_english("页面无法加载，请重试。")
+
+
+def test_second_english_image_reply_becomes_chinese_error(qapp, monkeypatch):
+    worker = ChatWorker(
+        "http://127.0.0.1:1/v1", DEFAULT_TRANSLATE_PROMPT, "", make_image())
+    calls = []
+    monkeypatch.setattr(
+        worker, "_request",
+        lambda image_retry: calls.append(image_retry)
+        or "The page cannot be loaded. Please retry later.",
+    )
+    results = []
+    errors = []
+    worker.result.connect(results.append)
+    worker.error.connect(errors.append)
+    worker.run()
+    assert calls == [False, True]
+    assert not results
+    assert errors and "已自动重试一次" in errors[0]
 
 
 def test_image_to_data_url_shrinks():
@@ -222,6 +278,37 @@ def test_long_result_expands_downward(qapp, tmp_path):
     w._show_result("这是一段很长的翻译结果。" * 30)
     assert w.result_multiline
     assert pump_until(lambda: w.height() > 100)
+    w.close()
+
+
+def test_very_long_result_scrolls_with_wheel(qapp, tmp_path):
+    w = TranslateWidget("http://127.0.0.1:1/v1",
+                        WidgetSettings(tmp_path / "w.json"))
+    w.show()
+    w._show_result("这是一段需要滚动查看的很长翻译结果。" * 160)
+    assert pump_until(lambda: w.mode == MODE_RESULT
+                      and w._result_scroll_max > 0
+                      and w.height() > 100)
+
+    class WheelDown:
+        accepted = False
+
+        @staticmethod
+        def pixelDelta():
+            return QPoint(0, 0)
+
+        @staticmethod
+        def angleDelta():
+            return QPoint(0, -120)
+
+        def accept(self):
+            self.accepted = True
+
+    event = WheelDown()
+    w.wheelEvent(event)
+    assert event.accepted
+    assert w._result_scroll_offset > 0
+    assert w._result_scroll_offset <= w._result_scroll_max
     w.close()
 
 

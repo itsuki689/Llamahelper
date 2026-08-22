@@ -17,9 +17,9 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from ui.theme import APP_QSS, FONT_STACK
+from ui.pages.translation_widget_page import TranslationWidgetPage
 from widget.settings import WidgetSettings
 from widget.prompt_presets import save_prompt_presets
-from widget.settings_dialog import PromptSettingsDialog
 from widget.dockable_translate_widget import (
     MODE_PROCESSING, MODE_RESULT, RING_HOVER, RING_PROCESSING_SMALL,
     STRIPE_HOVER, PromptPresetPopup, TranslateWidget,
@@ -86,11 +86,12 @@ def main() -> int:
         {"name": "技术文档", "prompt": "Translate technical documentation precisely."},
         {"name": "日语翻译", "prompt": "Translate between Japanese and Chinese."},
     ], "技术文档")
-    settings_dialog = PromptSettingsDialog(dialog_settings)
-    settings_dialog.show()
+    settings_page = TranslationWidgetPage(dialog_settings)
+    settings_page.resize(990, 720)
+    settings_page.show()
     app.processEvents()
-    settings_dialog.grab().save(str(OUTPUT_DIR / "translation_settings.png"))
-    settings_dialog.close()
+    settings_page.grab().save(str(OUTPUT_DIR / "translation_settings.png"))
+    settings_page.close()
 
     popup_presets = [
         {"name": f"提示词预设 {index}", "prompt": f"Prompt {index}"}
@@ -134,6 +135,20 @@ def main() -> int:
     long_result._set_result_frame_press_progress(1.0)
     save_widget(app, long_result, "translation_frame_pressed.png")
     long_result.close()
+
+    scroll_result = TranslateWidget(
+        "http://127.0.0.1:1/v1", WidgetSettings(settings_dir / "scroll.json")
+    )
+    scroll_result.move(120, 80)
+    scroll_result._anchor_center = scroll_result.geometry().center()
+    scroll_result._show_result(
+        "这是一段需要滚动浏览的超长翻译结果。" * 160
+    )
+    process_until(app, lambda: scroll_result.mode == MODE_RESULT
+                  and scroll_result._content_opacity > 0.99
+                  and scroll_result._result_scroll_max > 0)
+    save_widget(app, scroll_result, "translation_scroll_result.png")
+    scroll_result.close()
 
     docked = TranslateWidget(
         "http://127.0.0.1:1/v1", WidgetSettings(settings_dir / "docked.json")

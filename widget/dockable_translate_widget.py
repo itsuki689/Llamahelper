@@ -55,6 +55,8 @@ class ResultLayout:
     geometry: QRect
     direction: str
     multiline: bool
+    content_height: int
+    scroll_max: int
 
 
 class PromptPresetPopup(QFrame):
@@ -148,6 +150,9 @@ class TranslateWidget(QWidget):
         self._result_text = ""
         self._result_direction = "right"
         self._result_multiline = False
+        self._result_content_height = 0
+        self._result_scroll_offset = 0
+        self._result_scroll_max = 0
         self._result_frame_inset = 5.0
         self._result_frame_width = 1.45
         self._result_frame_alpha = 232.0
@@ -317,6 +322,9 @@ class TranslateWidget(QWidget):
         self._image = image
         self._result_text = ""
         self._result_multiline = False
+        self._result_content_height = 0
+        self._result_scroll_offset = 0
+        self._result_scroll_max = 0
         self._reset_result_feedback()
         self._content_opacity = 0.0
         self._processing_pulse.stop()
@@ -344,6 +352,9 @@ class TranslateWidget(QWidget):
         layout = self._calculate_result_layout(self._result_text)
         self._result_direction = layout.direction
         self._result_multiline = layout.multiline
+        self._result_content_height = layout.content_height
+        self._result_scroll_offset = 0
+        self._result_scroll_max = layout.scroll_max
         self._set_mode(MODE_RESULT)
         self._ring_diameter = RING_IDLE
         self._animate_geometry(layout.geometry, 360, self._save_settings)
@@ -454,6 +465,9 @@ class TranslateWidget(QWidget):
 
     def _finish_result_collapse(self) -> None:
         self._result_text = ""
+        self._result_content_height = 0
+        self._result_scroll_offset = 0
+        self._result_scroll_max = 0
         self._content_opacity = 0.0
         self._ring_diameter = RING_IDLE
         self._reset_result_feedback()
@@ -488,19 +502,30 @@ class TranslateWidget(QWidget):
             body_width = max(CIRCLE_BODY, single_width + 38)
             body_height = PILL_HEIGHT
             body_top = anchor.y() - body_height // 2
+            content_height = metrics.height()
+            scroll_max = 0
         else:
             body_width = max(190, max_body_width)
             text_width = max(80, body_width - 36)
             bounds = metrics.boundingRect(
-                QRect(0, 0, text_width, 2000),
+                QRect(0, 0, text_width, 100000),
                 Qt.TextFlag.TextWordWrap,
                 text,
             )
             room_below = available.bottom() - (anchor.y() - CIRCLE_BODY // 2)
             max_height = max(96, min(MAX_RESULT_HEIGHT,
                                       room_below - SCREEN_MARGIN))
+            if bounds.height() + 34 > max_height:
+                text_width = max(80, body_width - 44)
+                bounds = metrics.boundingRect(
+                    QRect(0, 0, text_width, 100000),
+                    Qt.TextFlag.TextWordWrap,
+                    text,
+                )
             body_height = min(max(96, bounds.height() + 34), max_height)
             body_top = anchor.y() - CIRCLE_BODY // 2
+            content_height = max(metrics.height(), bounds.height())
+            scroll_max = max(0, content_height - max(1, body_height - 26))
 
         if direction == "right":
             body_left = anchor.x() - CIRCLE_BODY // 2
@@ -519,7 +544,8 @@ class TranslateWidget(QWidget):
             body_width + PAINT_MARGIN * 2,
             body_height + PAINT_MARGIN * 2,
         )
-        return ResultLayout(geometry, direction, multiline)
+        return ResultLayout(
+            geometry, direction, multiline, content_height, scroll_max)
 
     @staticmethod
     def _circle_geometry(center: QPoint) -> QRect:
@@ -809,18 +835,52 @@ class TranslateWidget(QWidget):
         ))
         painter.setFont(self._result_font())
         text_rect = self._result_text_area()
-        flags = (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                 if not self._result_multiline
-                 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-                 | Qt.TextFlag.TextWordWrap)
-        painter.drawText(text_rect, int(flags), self._result_text)
+        if not self._result_multiline:
+            flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            painter.drawText(text_rect, int(flags), self._result_text)
+        else:
+            painter.save()
+            painter.setClipRect(text_rect)
+            draw_rect = QRectF(
+                text_rect.left(),
+                text_rect.top() - self._result_scroll_offset,
+                text_rect.width(),
+                max(text_rect.height(), self._result_content_height),
+            )
+            flags = (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+                     | Qt.TextFlag.TextWordWrap)
+            painter.drawText(draw_rect, int(flags), self._result_text)
+            painter.restore()
+
+        if self._result_scroll_max > 0:
+            track = QRectF(
+                body.right() - 12,
+                body.top() + 18,
+                2.5,
+                max(24.0, body.height() - 36),
+            )
+            visible_ratio = min(
+                1.0, text_rect.height() / max(1, self._result_content_height))
+            thumb_height = max(24.0, track.height() * visible_ratio)
+            travel = max(0.0, track.height() - thumb_height)
+            progress = self._result_scroll_offset / self._result_scroll_max
+            thumb = QRectF(
+                track.left(), track.top() + travel * progress,
+                track.width(), thumb_height,
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, round(46 * self._content_opacity)))
+            painter.drawRoundedRect(track, track.width() / 2, track.width() / 2)
+            painter.setBrush(QColor(255, 255, 255, round(170 * self._content_opacity)))
+            painter.drawRoundedRect(thumb, thumb.width() / 2, thumb.width() / 2)
 
     def _result_body_rect(self) -> QRectF:
         return QRectF(self.rect()).adjusted(
             PAINT_MARGIN, PAINT_MARGIN, -PAINT_MARGIN, -PAINT_MARGIN)
 
     def _result_text_area(self) -> QRectF:
-        return self._result_body_rect().adjusted(18, 13, -18, -13)
+        right_margin = 26 if self._result_scroll_max > 0 else 18
+        return self._result_body_rect().adjusted(18, 13, -right_margin, -13)
 
     def _result_text_hit_rect(self) -> QRectF:
         """Return the visible glyph area's forgiving click target."""
@@ -834,6 +894,8 @@ class TranslateWidget(QWidget):
                 width, height,
             )
         else:
+            if self._result_scroll_max > 0:
+                return area.adjusted(-4, -4, 4, 4)
             bounds = metrics.boundingRect(
                 QRect(0, 0, max(1, int(area.width())),
                       max(1, int(area.height()))),
@@ -846,6 +908,22 @@ class TranslateWidget(QWidget):
                 min(area.height(), bounds.height()),
             )
         return hit.adjusted(-4, -4, 4, 4)
+
+    def wheelEvent(self, event) -> None:
+        if self._mode == MODE_RESULT and self._result_scroll_max > 0:
+            delta = event.pixelDelta().y()
+            if not delta:
+                delta = round(event.angleDelta().y() / 120 * 42)
+            if delta:
+                self._result_scroll_offset = max(
+                    0,
+                    min(self._result_scroll_max,
+                        self._result_scroll_offset - delta),
+                )
+                self.update()
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     @staticmethod
     def _result_font() -> QFont:
