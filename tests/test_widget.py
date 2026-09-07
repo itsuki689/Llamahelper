@@ -29,7 +29,7 @@ from widget.dockable_translate_widget import (
 from widget.prompt_presets import (
     active_prompt_name, normalize_prompt_presets, save_prompt_presets,
 )
-from widget.settings_dialog import PromptSettingsDialog
+from ui.pages.translation_widget_page import TranslationWidgetPage
 
 FAKE_SERVER = Path(__file__).parent / "fake_llama_server.py"
 
@@ -70,9 +70,9 @@ def test_prompt_presets_migrate_and_persist(tmp_path):
     assert saved["pos"] == [1, 2]
 
 
-def test_prompt_settings_dialog_saves_and_applies(qapp, tmp_path):
+def test_prompt_settings_page_saves_and_applies(qapp, tmp_path):
     settings = WidgetSettings(tmp_path / "w.json")
-    dialog = PromptSettingsDialog(settings)
+    dialog = TranslationWidgetPage(settings)
     widget = TranslateWidget("http://127.0.0.1:1/v1", settings)
     applied = []
     dialog.prompt_applied.connect(

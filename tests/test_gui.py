@@ -25,6 +25,11 @@ def window(qapp, tmp_path, monkeypatch):
     win = mw.MainWindow()
     yield win
     win.close()
+    deadline = time.monotonic() + 6
+    while win._close_timer.isActive() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert not win._close_timer.isActive()
     app.processEvents()
 
 
