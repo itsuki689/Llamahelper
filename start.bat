@@ -5,6 +5,8 @@ title LlamaHelper
 
 set "VENV_DIR=%~dp0.venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
+set "BOOTSTRAP_PYTHON="
+set "USE_PY_LAUNCHER="
 
 echo [LlamaHelper] Checking runtime...
 
@@ -12,9 +14,9 @@ if exist "%VENV_PYTHON%" goto check_dependencies
 
 echo [LlamaHelper] Creating project virtual environment...
 call :find_python_312
-if not defined BOOTSTRAP_PYTHON call :find_compatible_python
+if not defined USE_PY_LAUNCHER if not defined BOOTSTRAP_PYTHON call :find_compatible_python
 
-if not defined BOOTSTRAP_PYTHON (
+if not defined USE_PY_LAUNCHER if not defined BOOTSTRAP_PYTHON (
     echo.
     echo [ERROR] Python 3.10 - 3.13 was not found.
     echo Install Python 3.12 from https://www.python.org/downloads/windows/

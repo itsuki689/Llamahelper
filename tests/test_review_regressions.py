@@ -5,6 +5,7 @@ import wave
 import socket
 import json
 import subprocess
+import sys
 from contextlib import nullcontext
 
 import pytest
@@ -175,3 +176,21 @@ def test_windows_equals_path_and_legacy_single_quotes():
 ])
 def test_windows_arguments_roundtrip_through_process_quoting(args):
     assert _split_windows_args(subprocess.list2cmdline(args)) == args
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows batch launcher")
+def test_launcher_only_install_reaches_venv_creation(tmp_path):
+    source = (Path(__file__).resolve().parents[1] / "start.bat").read_text(encoding="utf-8")
+    # Mock discovery and venv creation; execute the real selection branch.
+    prefix = source[:source.index("\n:find_python_312")]
+    prefix = prefix.replace('py -3.12 -m venv "%VENV_DIR%"',
+                            'echo LAUNCHER_SELECTED\n    exit /b 0')
+    discovery = ('\n:find_python_312\nset "USE_PY_LAUNCHER=1"\nexit /b 0\n'
+                 '\n:find_compatible_python\nexit /b 0\n')
+    script = tmp_path / "start.bat"
+    script.write_text(prefix + discovery + source[source.index("\n:failed"):], encoding="utf-8")
+    result = subprocess.run(["cmd.exe", "/d", "/c", str(script)], cwd=tmp_path,
+                            stdin=subprocess.DEVNULL, capture_output=True,
+                            timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode == 0, result.stdout.decode(errors="replace")
+    assert b"LAUNCHER_SELECTED" in result.stdout
