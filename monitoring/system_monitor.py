@@ -17,7 +17,6 @@ class SystemMonitor(QThread):
         self._interval = interval
         self._running = True
         self._pid = 0
-        psutil.cpu_percent(interval=None)  # 预热，首次调用恒为 0
 
     def set_server_pid(self, pid: int) -> None:
         self._pid = pid
@@ -26,6 +25,8 @@ class SystemMonitor(QThread):
         self._running = False
 
     def run(self) -> None:
+        psutil.cpu_percent(interval=None)  # 在采样线程内预热
+        proc: psutil.Process | None = None
         while self._running:
             data: dict = {
                 "cpu_percent": psutil.cpu_percent(interval=None),
@@ -36,14 +37,19 @@ class SystemMonitor(QThread):
                 "proc_cpu_percent": 0.0,
                 "proc_ram_mb": 0.0,
             }
-            if self._pid:
+            pid = self._pid
+            if proc is not None and proc.pid != pid:
+                proc = None
+            if pid:
                 try:
-                    proc = psutil.Process(self._pid)
+                    if proc is None or not proc.is_running():
+                        proc = psutil.Process(pid)
                     with proc.oneshot():
                         data["proc_running"] = proc.is_running()
                         data["proc_cpu_percent"] = proc.cpu_percent(interval=None)
                         data["proc_ram_mb"] = proc.memory_info().rss / (1024 ** 2)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    proc = None
                     data["proc_running"] = False
             self.stats.emit(data)
             waited = 0.0

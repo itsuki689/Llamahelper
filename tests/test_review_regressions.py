@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import wave
 import socket
+from contextlib import nullcontext
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -14,6 +15,7 @@ from config.app_config import AppConfig
 from ui.pages.parameters import ParametersPage
 from core.server_manager import port_in_use
 from ui.main_window import ApiHealthChecker
+from monitoring.system_monitor import SystemMonitor
 
 
 @pytest.fixture(scope="session")
@@ -81,3 +83,43 @@ def test_wildcard_port_probe_detects_listening_server():
         listener.bind(("0.0.0.0", 0))
         listener.listen(4)
         assert port_in_use("0.0.0.0", listener.getsockname()[1])
+
+
+def test_cpu_sampling_keeps_history_and_resets_on_pid_change(qapp, monkeypatch):
+    created = []
+
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+            self.calls = 0
+            created.append(pid)
+
+        def is_running(self):
+            return True
+
+        def oneshot(self):
+            return nullcontext()
+
+        def cpu_percent(self, interval=None):
+            self.calls += 1
+            return 0.0 if self.calls == 1 else 42.0
+
+        def memory_info(self):
+            return SimpleNamespace(rss=1024)
+
+    monkeypatch.setattr("monitoring.system_monitor.psutil.Process", Process)
+    monitor = SystemMonitor(interval=0)
+    monitor.set_server_pid(11)
+    samples = []
+
+    def sample(data):
+        samples.append(data["proc_cpu_percent"])
+        if len(samples) == 2:
+            monitor.set_server_pid(22)
+        if len(samples) == 4:
+            monitor.stop()
+
+    monitor.stats.connect(sample)
+    monitor.run()
+    assert samples == [0.0, 42.0, 0.0, 42.0]
+    assert created == [11, 22]
