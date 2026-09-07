@@ -37,10 +37,42 @@ def qapp():
 def test_app_icon_exists_and_loads(qapp):
     from PySide6.QtGui import QIcon
 
-    from main import resource_path
-    icon_path = resource_path("assets/icon.png")
-    assert icon_path.is_file()
-    assert not QIcon(str(icon_path)).isNull()
+    from main import load_app_icon, resource_path
+    for name in ("assets/icon.png", "assets/icon.ico"):
+        icon_path = resource_path(name)
+        assert icon_path.is_file()
+        assert not QIcon(str(icon_path)).isNull()
+    assert not load_app_icon().isNull()
+
+
+def test_main_window_is_frameless_and_keeps_icon(window, qapp):
+    from PySide6.QtCore import Qt
+    from main import load_app_icon
+
+    window.setWindowIcon(load_app_icon())
+    flags = window.windowFlags()
+    assert flags & Qt.WindowType.FramelessWindowHint
+    assert not flags & Qt.WindowType.WindowTitleHint
+    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert window.windowTitle().startswith("LlamaHelper")
+    assert not window.windowIcon().isNull()
+    assert window.btn_win_minimize.property("role") == "minimize"
+    assert window.btn_win_maximize.property("role") == "maximize"
+    assert window.btn_win_close.property("role") == "close"
+    assert window.btn_win_minimize.text() == "\u2212"
+    assert window.btn_win_maximize.text() == "\u25a1"
+    assert window.btn_win_close.text() == "\u00d7"
+    assert window.btn_win_close.size().width() == 46
+
+
+def test_frameless_window_maximize_toggle(window, qapp):
+    window.showMaximized()
+    qapp.processEvents()
+    assert window.btn_win_maximize.text() == "\u2750"
+    window._toggle_maximized()
+    qapp.processEvents()
+    assert not window.isMaximized()
+    assert window.btn_win_maximize.text() == "\u25a1"
 
 
 def test_main_window_opens_dockable_translation_widget(window, qapp):

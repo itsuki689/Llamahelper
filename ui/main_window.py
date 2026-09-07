@@ -5,7 +5,8 @@ import time
 import urllib.error
 import urllib.request
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
     QStackedWidget, QVBoxLayout, QWidget,
@@ -59,6 +60,27 @@ class ApiHealthChecker(QThread):
             self.failed.emit("等待 API 就绪超时")
 
 
+class WindowDragLabel(QLabel):
+    """无标题栏窗口的原生拖动区域。"""
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            window.showNormal() if window.isMaximized() else window.showMaximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class MainWindow(QMainWindow):
     NAV = [("Dashboard", "仪表盘"), ("Parameters", "参数"),
            ("Benchmark", "性能测试"), ("Logs", "日志"), ("Presets", "预设"),
@@ -66,6 +88,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("LlamaHelper — llama.cpp 调参与性能测试")
         self.resize(1180, 780)
 
@@ -115,10 +140,13 @@ class MainWindow(QMainWindow):
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 0, 0, 12)
         sb.setSpacing(0)
-        title = QLabel("LlamaHelper")
+
+        title = WindowDragLabel("LlamaHelper")
         title.setObjectName("appTitle")
-        subtitle = QLabel("llama.cpp 调参 · 性能测试")
+        title.setToolTip("拖动窗口 · 双击最大化/还原")
+        subtitle = WindowDragLabel("llama.cpp 调参 · 性能测试")
         subtitle.setObjectName("appSubtitle")
+        subtitle.setToolTip("拖动窗口 · 双击最大化/还原")
         sb.addWidget(title)
         sb.addWidget(subtitle)
         self.nav_buttons: list[QPushButton] = []
@@ -144,13 +172,67 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(p)
 
         lay.addWidget(sidebar)
-        lay.addWidget(self.stack, 1)
+
+        # 右侧保留 Apple 风格主体，同时补回 Windows 常用的标题栏按钮。
+        content = QWidget()
+        content.setObjectName("contentArea")
+        content_lay = QVBoxLayout(content)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
+
+        title_bar = QFrame()
+        title_bar.setObjectName("windowTitleBar")
+        title_bar.setFixedHeight(36)
+        title_bar_lay = QHBoxLayout(title_bar)
+        title_bar_lay.setContentsMargins(0, 0, 0, 0)
+        title_bar_lay.setSpacing(0)
+        drag_area = WindowDragLabel("")
+        drag_area.setObjectName("windowDragArea")
+        drag_area.setToolTip("拖动窗口 · 双击最大化/还原")
+        title_bar_lay.addWidget(drag_area, 1)
+
+        self.btn_win_minimize = QPushButton("\u2212")
+        self.btn_win_maximize = QPushButton("\u25a1")
+        self.btn_win_close = QPushButton("\u00d7")
+        for button, role, tip in (
+                (self.btn_win_minimize, "minimize", "最小化"),
+                (self.btn_win_maximize, "maximize", "最大化/还原"),
+                (self.btn_win_close, "close", "关闭")):
+            button.setObjectName("winCaptionButton")
+            button.setProperty("role", role)
+            button.setToolTip(tip)
+            button.setAccessibleName(tip)
+            button.setFixedSize(46, 35)
+            title_bar_lay.addWidget(button)
+        self.btn_win_minimize.clicked.connect(self.showMinimized)
+        self.btn_win_maximize.clicked.connect(self._toggle_maximized)
+        self.btn_win_close.clicked.connect(self.close)
+
+        content_lay.addWidget(title_bar)
+        content_lay.addWidget(self.stack, 1)
+        lay.addWidget(content, 1)
         self._switch_page(0)
 
     def _switch_page(self, idx: int) -> None:
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self.nav_buttons):
             b.setChecked(i == idx)
+
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_maximize_button()
+
+    def _sync_maximize_button(self) -> None:
+        if hasattr(self, "btn_win_maximize"):
+            self.btn_win_maximize.setText("\u2750" if self.isMaximized() else "\u25a1")
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_maximize_button()
 
     def open_translate_widget(self) -> None:
         """启动/唤起翻译挂件，跟随当前参数页的 host/port。"""

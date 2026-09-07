@@ -19,13 +19,20 @@ APP_QSS = f"""
     color: #F2F2F7;
     outline: none;
 }}
-QMainWindow, QDialog {{ background: {BG}; }}
-QWidget#root {{ background: {BG}; }}
+QMainWindow {{ background: transparent; }}
+QDialog {{ background: {BG}; }}
+QWidget#root {{
+    background: {BG};
+    border: 1px solid #48484A;
+    border-radius: 16px;
+}}
 
 /* ---------------- 侧边栏 ---------------- */
 QFrame#sidebar {{
     background: #232325;
     border-right: 1px solid #38383A;
+    border-top-left-radius: 15px;
+    border-bottom-left-radius: 15px;
 }}
 QLabel#appTitle {{
     font-size: 17px; font-weight: 700;
@@ -50,6 +57,32 @@ QPushButton#navBtn:checked {{
     color: white;
     font-weight: 600;
 }}
+/* 右上角 Windows 标题栏控制，和 Apple 圆角外框共存 */
+QWidget#contentArea, QFrame#windowTitleBar {{
+    background: transparent;
+    border: none;
+}}
+QPushButton#winCaptionButton {{
+    min-width: 46px; max-width: 46px;
+    min-height: 35px; max-height: 35px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: #D1D1D6;
+    font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+    font-size: 16px;
+    font-weight: 400;
+}}
+QPushButton#winCaptionButton:hover {{ background: #3A3A3C; color: white; }}
+QPushButton#winCaptionButton:pressed {{ background: #545456; }}
+QPushButton#winCaptionButton[role="close"] {{
+    border-top-right-radius: 15px;
+    font-size: 20px;
+}}
+QPushButton#winCaptionButton[role="close"]:hover {{ background: #C42B1C; }}
+QPushButton#winCaptionButton[role="close"]:pressed {{ background: #A92519; }}
 
 /* ---------------- 卡片 ---------------- */
 QFrame#card {{

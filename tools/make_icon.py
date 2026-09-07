@@ -1,4 +1,4 @@
-"""生成应用图标：深色圆角方块 + 居中白圆点（Apple 风格）。
+"""生成应用图标：黑色圆形 + 居中白色竖向圆角矩形洞。
 
 离屏渲染，输出：
   assets/icon.png  — 256x256，供窗口图标使用
@@ -17,51 +17,49 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QGuiApplication, QImage, QLinearGradient,
-                           QPainter, QRadialGradient)
+from PySide6.QtGui import (QColor, QGuiApplication, QImage, QPainter, QPen,
+                           QRadialGradient)
 
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
 def render_icon(size: int) -> QImage:
-    """渲染指定尺寸的图标（圆角外透明）。"""
+    """渲染指定尺寸的图标（圆形外透明）。"""
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(Qt.GlobalColor.transparent)
 
     p = QPainter(img)
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    margin = size * 0.02
-    rect = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
-    radius = size * 0.225  # iOS 圆角比例
-
-    # 背景：深色竖向渐变（上浅下深，Apple 深色质感）
-    bg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    bg.setColorAt(0.0, QColor("#3A3A3E"))
-    bg.setColorAt(1.0, QColor("#141416"))
-    p.setBrush(bg)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(rect, radius, radius)
-
-    # 白圆点：径向微渐变 + 柔和投影
-    d = size * 0.34
+    margin = max(1.0, size * 0.055)
+    circle = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
     center = QPointF(size / 2, size / 2)
-    shadow_r = d * 0.62
-    shadow = QRadialGradient(QPointF(center.x(), center.y() + size * 0.012),
-                             shadow_r)
-    shadow.setColorAt(0.0, QColor(0, 0, 0, 90))
-    shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
-    p.setBrush(shadow)
-    p.drawEllipse(center, shadow_r, shadow_r)
 
-    dot_rect = QRectF(center.x() - d / 2, center.y() - d / 2, d, d)
-    dot = QRadialGradient(QPointF(center.x() - d * 0.18,
-                                  center.y() - d * 0.22), d * 0.75)
-    dot.setColorAt(0.0, QColor("#FFFFFF"))
-    dot.setColorAt(1.0, QColor("#E8E8ED"))
-    p.setBrush(dot)
-    p.drawEllipse(dot_rect)
+    # 黑色圆形主体：极轻的中心提亮保证大尺寸下仍有层次。
+    black = QRadialGradient(
+        QPointF(center.x() - size * 0.08, center.y() - size * 0.10),
+        size * 0.58,
+    )
+    black.setColorAt(0.0, QColor("#18181B"))
+    black.setColorAt(1.0, QColor("#050506"))
+    p.setBrush(black)
+    edge = QPen(QColor(255, 255, 255, 92), max(0.7, size * 0.006))
+    p.setPen(edge)
+    p.drawEllipse(circle)
+
+    # 中央白色竖向圆角矩形洞；各尺寸分别渲染，确保 16px 下仍然清晰。
+    hole_width = max(2.5, size * 0.18)
+    hole_height = max(7.0, size * 0.46)
+    hole = QRectF(
+        center.x() - hole_width / 2,
+        center.y() - hole_height / 2,
+        hole_width,
+        hole_height,
+    )
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor("#F7F7FA"))
+    p.drawRoundedRect(hole, hole_width / 2, hole_width / 2)
 
     p.end()
     return img
