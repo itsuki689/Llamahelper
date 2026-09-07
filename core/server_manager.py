@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import socket
+from dataclasses import replace
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
@@ -35,6 +36,7 @@ class ServerManager(QObject):
     pid_changed = Signal(int)           # 0 表示无进程
     start_failed = Signal(str)          # 启动失败原因
     exited_unexpectedly = Signal(int)   # 运行中意外退出（exit code）
+    process_started = Signal(object)    # 本次实际启动的 ServerParams 快照
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -46,8 +48,10 @@ class ServerManager(QObject):
         self._state = STATE_STOPPED
         self._buf = ""
         self._intentional_stop = False
+        self._launch_params: ServerParams | None = None
 
         self._proc.readyReadStandardOutput.connect(self._on_ready_read)
+        self._proc.started.connect(self._on_started)
         self._proc.errorOccurred.connect(self._on_error)
         self._proc.finished.connect(self._on_finished)
 
@@ -73,7 +77,7 @@ class ServerManager(QObject):
     # ------------------------------------------------------------------
     def start(self, params: ServerParams) -> bool:
         """启动 llama-server。返回 False 表示未执行（原因已通过信号/校验给出）。"""
-        if self.is_running():
+        if self._state != STATE_STOPPED:
             self.start_failed.emit("服务已在运行，拒绝重复启动")
             return False
         errors = params.validate()
@@ -88,6 +92,7 @@ class ServerManager(QObject):
         cmd = params.build_command()
         self._intentional_stop = False
         self._buf = ""
+        self._launch_params = replace(params)
         self._set_state(STATE_STARTING)
         self.log_line.emit("$ " + params.command_display())
         self._proc.start(cmd[0], cmd[1:])
@@ -112,9 +117,10 @@ class ServerManager(QObject):
 
     def restart(self, params: ServerParams) -> None:
         """停止后自动以 params 重新启动。"""
-        if self.is_running():
-            self._pending_restart = params
-            self.stop()
+        if self._state != STATE_STOPPED:
+            self._pending_restart = replace(params)
+            if self.is_running():
+                self.stop()
         else:
             self.start(params)
 
@@ -146,6 +152,11 @@ class ServerManager(QObject):
             line = line.rstrip("\r")
             if line:
                 self.log_line.emit(line)
+
+    def _on_started(self) -> None:
+        if self._state == STATE_STARTING and self._launch_params is not None:
+            self.pid_changed.emit(self.pid())
+            self.process_started.emit(replace(self._launch_params))
 
     def _on_error(self, error: QProcess.ProcessError) -> None:
         if error == QProcess.ProcessError.FailedToStart:

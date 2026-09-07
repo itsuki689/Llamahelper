@@ -1,4 +1,4 @@
-"""Regression tests for closing windows with real in-flight HTTP requests."""
+"""Regression tests for window, request, and server process lifetimes."""
 from __future__ import annotations
 
 import threading
@@ -21,7 +21,7 @@ from widget.api_client import ChatWorker
 from widget.settings import WidgetSettings
 from benchmark.runner import BenchJob, BenchmarkRunner
 from core.params import ServerParams
-from core.server_manager import port_in_use
+from core.server_manager import STATE_RUNNING, STATE_STOPPED, port_in_use
 
 
 @pytest.fixture(scope="session")
@@ -204,3 +204,45 @@ def test_completion_signal_does_not_destroy_a_running_benchmark(window, tmp_path
         release.set()
         if isValid(runner):
             runner.wait(3000)
+
+
+@pytest.mark.parametrize("change_port", [False, True])
+def test_restart_checks_new_process_and_restores_dashboard(window, tmp_path, monkeypatch, change_port):
+    _, port = configure_fake_server(window, tmp_path, monkeypatch)
+    launched_ports = []
+    window.server.process_started.connect(lambda p: launched_ports.append(p.port))
+    window._start_server()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING)
+    first_pid = window.server.pid()
+    if change_port:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        params = window.parameters.get_params()
+        params.port = port
+        window.parameters.set_params(params)
+    window.dashboard.btn_restart.click()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING
+                      and window.server.pid() != first_pid, timeout=12)
+    assert len(launched_ports) == 2 and launched_ports[-1] == port
+    assert window.dashboard.btn_webui.isEnabled()
+    assert window.dashboard.btn_copy.isEnabled()
+    assert window.dashboard.btn_restart.isEnabled()
+    assert str(port) in window.dashboard._api_url
+    window.server.stop()
+    assert pump_until(lambda: window.server.state == STATE_STOPPED, timeout=8)
+
+
+def test_stale_health_result_cannot_mark_new_process_ready(window, monkeypatch):
+    # Model a queued result arriving after its checker was replaced.
+    monkeypatch.setattr(mw.ApiHealthChecker, "start", lambda self: None)
+    marked = []
+    monkeypatch.setattr(window.server, "mark_running", lambda: marked.append(True))
+    window._start_health_check(ServerParams(port=8080))
+    old_checker = window.health_checker
+    window._start_health_check(ServerParams(port=8081))
+    new_checker = window.health_checker
+    old_checker.ready.emit()
+    assert not marked
+    new_checker.ready.emit()
+    assert marked == [True]

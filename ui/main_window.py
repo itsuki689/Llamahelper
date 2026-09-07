@@ -49,7 +49,8 @@ class ApiHealthChecker(QThread):
             try:
                 with urllib.request.urlopen(self._url, timeout=2) as resp:
                     if resp.status == 200:
-                        self.ready.emit()
+                        if self._running:
+                            self.ready.emit()
                         return
             except (urllib.error.URLError, OSError):
                 pass
@@ -196,6 +197,7 @@ class MainWindow(QMainWindow):
             lambda: self.server.restart(self.parameters.get_params()))
         # 进程状态
         self.server.state_changed.connect(self._on_server_state)
+        self.server.process_started.connect(self._start_health_check)
         self.server.pid_changed.connect(self._on_pid_changed)
         self.server.start_failed.connect(self._on_start_failed)
         self.server.exited_unexpectedly.connect(self._on_unexpected_exit)
@@ -222,28 +224,45 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法启动", "\n".join(errors))
             return
         self.app_config.save_params(params)
-        if self.server.start(params):
-            self._start_health_check(params)
+        self.server.start(params)
 
     def _start_health_check(self, params: ServerParams) -> None:
-        if self.health_checker and self.health_checker.isRunning():
-            self.health_checker.stop()
-            self.health_checker.wait(2000)
+        self._stop_health_check()
+        if self._close_requested:
+            return
         self.health_checker = ApiHealthChecker(params.host, params.port, parent=self)
         self.health_checker.ready.connect(self._on_api_ready)
         self.health_checker.failed.connect(self._on_health_failed)
+        self.health_checker.finished.connect(self._on_health_check_finished)
         self.health_checker.start()
 
+    def _stop_health_check(self) -> None:
+        checker = self.health_checker
+        self.health_checker = None
+        if checker is not None:
+            checker.stop()
+
+    def _on_health_check_finished(self) -> None:
+        checker = self.sender()
+        if checker is self.health_checker:
+            self.health_checker = None
+        checker.deleteLater()
+
     def _on_api_ready(self) -> None:
+        if self.sender() is not self.health_checker or self._close_requested:
+            return
         self.server.mark_running()
         p = self.parameters.get_params()
         self._on_log_line(f"[*] API 就绪: {p.api_base_url()}")
 
     def _on_health_failed(self, msg: str) -> None:
-        if self.server.state == STATE_STARTING:
+        if (self.sender() is self.health_checker
+                and self.server.state == STATE_STARTING):
             self._on_log_line(f"[!] {msg}")
 
     def _on_server_state(self, state: str) -> None:
+        if state not in (STATE_STARTING, STATE_RUNNING):
+            self._stop_health_check()
         p = self.parameters.get_params()
         self.dashboard.set_server_state(
             state, pid=self.server.pid(),
