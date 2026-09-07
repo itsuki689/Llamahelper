@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import math
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from core.network import http_base_url
@@ -196,9 +197,31 @@ class ServerParams:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ServerParams":
-        names = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        filtered = {k: v for k, v in (data or {}).items() if k in names}
+    def from_dict(cls, data: object) -> "ServerParams":
+        if not isinstance(data, dict):
+            return cls()
+        filtered = {}
+        for key, default in cls().to_dict().items():
+            value = data.get(key, default)
+            if type(default) is float:
+                if type(value) not in (int, float):
+                    continue
+                try:
+                    value = float(value)
+                except OverflowError:
+                    continue
+                if not math.isfinite(value):
+                    continue
+            elif type(value) is not type(default):
+                continue
+            elif type(value) is int and not -(2 ** 31) <= value < 2 ** 31:
+                continue  # Qt integer controls cannot accept larger values.
+            filtered[key] = value
+        for key, choices in (("cache_type_k", KV_CACHE_TYPES),
+                             ("cache_type_v", KV_CACHE_TYPES),
+                             ("rope_scaling", ROPE_SCALING_TYPES)):
+            if filtered.get(key) not in choices:
+                filtered.pop(key, None)
         return cls(**filtered)
 
     def preset_dict(self) -> dict:

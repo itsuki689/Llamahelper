@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import wave
 import socket
+import json
 from contextlib import nullcontext
 
 import pytest
@@ -12,6 +13,7 @@ from benchmark.audio import audio_duration
 from benchmark.runner import BenchJob, BenchmarkRunner
 from core.params import ServerParams
 from config.app_config import AppConfig
+from config.presets import PresetManager
 from ui.pages.parameters import ParametersPage
 from core.server_manager import port_in_use
 from ui.main_window import ApiHealthChecker
@@ -123,3 +125,34 @@ def test_cpu_sampling_keeps_history_and_resets_on_pid_change(qapp, monkeypatch):
     monitor.run()
     assert samples == [0.0, 42.0, 0.0, 42.0]
     assert created == [11, 22]
+
+
+@pytest.mark.parametrize("data", [[], [1], None, True, 42, "text"])
+def test_config_and_presets_recover_from_non_object_json(tmp_path, data):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert AppConfig(path).load_params() == ServerParams()
+    assert PresetManager(path).names()
+
+
+def test_bad_parameter_types_are_defaulted_without_losing_valid_fields(qapp, tmp_path):
+    path = tmp_path / "config.json"
+    data = {"threads": None, "model_path": [], "flash_attention": "false",
+            "port": True, "context_size": 2 ** 80, "temp": float("nan"),
+            "cache_type_v": "invalid", "extra_args": {}, "batch_size": 512}
+    path.write_text(json.dumps({"params": data}), encoding="utf-8")
+    loaded = AppConfig(path).load_params()
+    assert loaded == ServerParams(batch_size=512)
+    page = ParametersPage()
+    try:
+        page.set_params(loaded)
+    finally:
+        page.close()
+    assert ServerParams.from_dict([1]) == ServerParams()
+
+
+def test_invalid_encoding_recovers_without_crashing(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_bytes(b"\xff\xfe\x80")
+    assert AppConfig(path).load_params() == ServerParams()
+    assert PresetManager(path).names()
