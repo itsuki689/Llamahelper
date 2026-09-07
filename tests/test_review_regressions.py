@@ -10,6 +10,7 @@ from contextlib import nullcontext
 
 import pytest
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QEvent
 
 from benchmark.audio import audio_duration
 from benchmark.runner import BenchJob, BenchmarkRunner
@@ -20,6 +21,9 @@ from ui.pages.parameters import ParametersPage
 from core.server_manager import port_in_use
 from ui.main_window import ApiHealthChecker
 from monitoring.system_monitor import SystemMonitor
+from widget.api_client import ChatWorker
+from widget.dockable_translate_widget import TranslateWidget
+from widget.settings import WidgetSettings
 
 
 @pytest.fixture(scope="session")
@@ -194,3 +198,18 @@ def test_launcher_only_install_reaches_venv_creation(tmp_path):
                             timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
     assert result.returncode == 0, result.stdout.decode(errors="replace")
     assert b"LAUNCHER_SELECTED" in result.stdout
+
+
+def test_completed_translation_workers_are_released(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(ChatWorker, "_request", lambda self, image_retry: "译文")
+    widget = TranslateWidget("http://127.0.0.1:1/v1", WidgetSettings(tmp_path / "widget.json"))
+    try:
+        for _ in range(8):
+            assert widget.translate("hello")
+            assert widget._worker.wait(1000)
+            QApplication.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert widget._worker is None
+            assert not widget.findChildren(ChatWorker)
+    finally:
+        widget.close()
