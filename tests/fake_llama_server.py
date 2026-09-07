@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROMPT_TPS = 400.0
@@ -18,6 +19,7 @@ GEN_TPS = 250.0
 
 
 class Handler(BaseHTTPRequestHandler):
+    stall_post_marker = ""
     def log_message(self, *args):  # 静默 HTTP 访问日志
         pass
 
@@ -36,6 +38,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok"})
 
     def do_POST(self) -> None:
+        if self.stall_post_marker:
+            Path(self.stall_post_marker).write_text(self.path, encoding="utf-8")
+            time.sleep(60)  # Cancellation tests stop the process to unblock.
+            return
         if self.path.startswith("/v1/chat/completions"):
             length = int(self.headers.get("Content-Length", "0"))
             try:
@@ -99,7 +105,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--stall-post", default="")
     args, _unknown = parser.parse_known_args()
+    Handler.stall_post_marker = args.stall_post
 
     print("llama_model_loader: loaded meta data with 42 key-value pairs "
           "and 363 tensors from fake-model.gguf", flush=True)

@@ -76,6 +76,10 @@ class MainWindow(QMainWindow):
         self.bench_runner: BenchmarkRunner | None = None
         self._translate_widget = None
         self._close_requested = False
+        from PySide6.QtCore import QTimer
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(50)
+        self._close_timer.timeout.connect(self.close)
 
         # ---- UI ----
         self._build_ui()
@@ -304,7 +308,8 @@ class MainWindow(QMainWindow):
         self.bench_runner.sig_log.connect(self._on_log_line)
         self.bench_runner.sig_run_started.connect(self.benchmark.on_run_started)
         self.bench_runner.sig_run_result.connect(self.benchmark.on_run_result)
-        self.bench_runner.sig_finished_all.connect(self._on_bench_finished)
+        # Wait for run() to return before deleting the QThread.
+        self.bench_runner.finished.connect(self._on_bench_finished)
         self.bench_runner.start()
 
     def _stop_benchmark(self) -> None:
@@ -320,22 +325,26 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
-        self._close_requested = True
-        self.app_config.save_params(self.parameters.get_params())
-        if self._translate_widget is not None and not self._translate_widget.close():
-            event.ignore()
-            return
+        if not self._close_requested:
+            self._close_requested = True
+            self.app_config.save_params(self.parameters.get_params())
+            self.setEnabled(False)
+        if self._translate_widget is not None:
+            self._translate_widget.close()
         if self.bench_runner and self.bench_runner.isRunning():
             self.bench_runner.stop()
-            self.bench_runner.wait(8000)
-        if self.health_checker and self.health_checker.isRunning():
-            self.health_checker.stop()
-            self.health_checker.wait(2000)
-        if self.server.is_running():
-            self.server.stop()
-            self.server.wait_stopped(6000)
+        for checker in self.findChildren(ApiHealthChecker):
+            checker.stop()
+        self.server.shutdown()
         self.gpu_monitor.stop()
         self.sys_monitor.stop()
-        self.gpu_monitor.wait(2000)
-        self.sys_monitor.wait(2000)
+        threads_busy = any(thread.isRunning() or not thread.wait(0)
+                           for thread in self.findChildren(QThread))
+        if (self._translate_widget is not None or threads_busy
+                or self.server.state != STATE_STOPPED):
+            if not self._close_timer.isActive():
+                self._close_timer.start()
+            event.ignore()
+            return
+        self._close_timer.stop()
         event.accept()

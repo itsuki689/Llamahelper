@@ -124,6 +124,11 @@ class ServerManager(QObject):
             return True
         return self._proc.waitForFinished(timeout_ms)
 
+    def shutdown(self) -> None:
+        """应用退出：取消已排队的重启，并异步停止进程。"""
+        self._pending_restart = None
+        self.stop()
+
     # ------------------------------------------------------------------
     def _set_state(self, state: str) -> None:
         if state == self._state:
