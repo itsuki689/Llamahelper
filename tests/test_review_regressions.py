@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QApplication
 from benchmark.audio import audio_duration
 from benchmark.runner import BenchJob, BenchmarkRunner
 from core.params import ServerParams
+from config.app_config import AppConfig
+from ui.pages.parameters import ParametersPage
 
 
 @pytest.fixture(scope="session")
@@ -38,3 +40,20 @@ def test_asr_skips_broken_wav_and_measures_remaining_files(qapp, tmp_path, monke
     runner._measure_asr(SimpleNamespace(poll=lambda: None), ServerParams(), result)
     assert result["ok"] and result["asr_files"] == 1
     assert result["audio_s"] == 1.0
+
+
+def test_incomplete_extra_arguments_can_be_restored_and_corrected(qapp, tmp_path):
+    config = AppConfig(tmp_path / "config.json")
+    params = ServerParams(llama_server_path=__file__, model_path=__file__,
+                          extra_args='--alias "')
+    config.save_params(params)
+    page = ParametersPage()
+    try:
+        page.set_params(config.load_params())
+        assert "额外参数格式错误" in page.cmd_preview.toPlainText()
+        assert any("额外参数" in error for error in page.get_params().validate())
+        page.edit_extra.setText('--alias "my model"')
+        assert "额外参数格式错误" not in page.cmd_preview.toPlainText()
+        assert not page.get_params().validate()
+    finally:
+        page.close()

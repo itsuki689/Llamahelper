@@ -184,6 +184,10 @@ class ServerParams:
             errors.append(f"非法 KV Cache V 类型: {self.cache_type_v}")
         if self.rope_scaling not in ROPE_SCALING_TYPES:
             errors.append(f"非法 RoPE 缩放类型: {self.rope_scaling}")
+        try:
+            split_extra_args(self.extra_args)
+        except ValueError as exc:
+            errors.append(f"额外参数格式错误: {exc}")
         return errors
 
     # ------------------------------------------------------------------
