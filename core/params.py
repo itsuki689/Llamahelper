@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shlex
 import math
+import subprocess
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from core.network import http_base_url
@@ -23,16 +24,61 @@ def split_extra_args(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    # posix=False 保留 Windows 路径中的反斜杠，但会保留引号，需要再剥掉
-    parts = shlex.split(text, posix=(os.name != "nt"))
-    if os.name == "nt":
-        cleaned = []
-        for p in parts:
-            if len(p) >= 2 and p[0] == p[-1] and p[0] in ("'", '"'):
-                p = p[1:-1]
-            cleaned.append(p)
-        parts = cleaned
-    return parts
+    return _split_windows_args(text) if os.name == "nt" else shlex.split(text)
+
+
+def _split_windows_args(text: str) -> list[str]:
+    """Parse Windows double quotes/backslashes, including --option="a b".
+
+    Keep legacy single-quoted whole arguments; reject unfinished quotes so
+    the parameter editor can report incomplete input instead of launching it.
+    """
+    result, token = [], []
+    quote = None
+    started = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char.isspace() and quote is None:
+            if started:
+                result.append("".join(token))
+                token, started = [], False
+            i += 1
+            continue
+        if char == "\\" and quote != "'":
+            end = i
+            while end < len(text) and text[end] == "\\":
+                end += 1
+            count = end - i
+            if end < len(text) and text[end] == '"':
+                token.append("\\" * (count // 2))
+                if count % 2:
+                    token.append('"')
+                    started, i = True, end + 1
+                    continue
+                i = end  # Even backslashes leave the following quote structural.
+                char = '"'
+            else:
+                token.append("\\" * count)
+                started, i = True, end
+                continue
+        if char == '"' and quote != "'":
+            if quote == '"' and i + 1 < len(text) and text[i + 1] == '"':
+                token.append('"')
+                i += 1
+            else:
+                quote = None if quote == '"' else '"'
+        elif char == "'" and (quote == "'" or (quote is None and not started)):
+            quote = None if quote == "'" else "'"
+        else:
+            token.append(char)
+        started = True
+        i += 1
+    if quote is not None:
+        raise ValueError("No closing quotation")
+    if started:
+        result.append("".join(token))
+    return result
 
 
 @dataclass
@@ -148,6 +194,8 @@ class ServerParams:
 
     def command_display(self) -> str:
         """用于界面展示的命令字符串（含必要引号）。"""
+        if os.name == "nt":
+            return subprocess.list2cmdline(self.build_command())
         parts = []
         for arg in self.build_command():
             if " " in arg:

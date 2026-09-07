@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import wave
 import socket
 import json
+import subprocess
 from contextlib import nullcontext
 
 import pytest
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from benchmark.audio import audio_duration
 from benchmark.runner import BenchJob, BenchmarkRunner
-from core.params import ServerParams
+from core.params import ServerParams, _split_windows_args
 from config.app_config import AppConfig
 from config.presets import PresetManager
 from ui.pages.parameters import ParametersPage
@@ -156,3 +157,21 @@ def test_invalid_encoding_recovers_without_crashing(tmp_path):
     path.write_bytes(b"\xff\xfe\x80")
     assert AppConfig(path).load_params() == ServerParams()
     assert PresetManager(path).names()
+
+
+def test_windows_equals_path_and_legacy_single_quotes():
+    assert _split_windows_args(r'--chat-template-file="C:\my folder\template.jinja"') == [
+        r'--chat-template-file=C:\my folder\template.jinja']
+    assert _split_windows_args("--alias 'my model'") == ["--alias", "my model"]
+    with pytest.raises(ValueError):
+        _split_windows_args('--alias="unfinished')
+
+
+@pytest.mark.parametrize("args", [
+    ["--alias", "", "my model"],
+    ["--alias", 'a "quoted" name', r"C:\my folder\\"],
+    [r"--file=C:\my folder\template.jinja", r"\\server\share\name"],
+    ["中文 名称", "a\tb", 'a\\"b', 'a\\\\"b'],
+])
+def test_windows_arguments_roundtrip_through_process_quoting(args):
+    assert _split_windows_args(subprocess.list2cmdline(args)) == args
