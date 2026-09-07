@@ -106,13 +106,14 @@ def mp3_duration(path: Path) -> float:
 def audio_duration(path: Path) -> float:
     """返回音频时长（秒），不支持的格式抛 ValueError。"""
     suffix = path.suffix.lower()
-    if suffix == ".wav":
-        return wav_duration(path)
-    if suffix == ".flac":
-        return flac_duration(path)
-    if suffix == ".mp3":
-        return mp3_duration(path)
-    raise ValueError(f"不支持获取时长的格式: {suffix}（仅支持 wav/flac/mp3）")
+    reader = {".wav": wav_duration, ".flac": flac_duration,
+              ".mp3": mp3_duration}.get(suffix)
+    if reader is None:
+        raise ValueError(f"不支持获取时长的格式: {suffix}（仅支持 wav/flac/mp3）")
+    try:
+        return reader(path)
+    except (OSError, EOFError, wave.Error) as exc:
+        raise ValueError(f"无法读取音频 {path.name}: {exc}") from exc
 
 
 def list_audio_files(directory: str | Path) -> list[Path]:
