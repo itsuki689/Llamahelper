@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from widget.api_client import DEFAULT_TRANSLATE_PROMPT, ChatWorker
 from widget.prompt_presets import (
     active_prompt_name, normalize_prompt_presets, prompt_for_name,
-    save_prompt_presets,
+    save_prompt_presets, load_prompt_settings, image_mode_for_name,
 )
 from widget.settings import WidgetSettings
 
@@ -126,7 +126,7 @@ class TranslateWidget(QWidget):
         super().__init__(parent)
         self.base_url = base_url
         self.settings = settings or WidgetSettings()
-        saved = self.settings.load()
+        saved = load_prompt_settings(self.settings)
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -144,6 +144,8 @@ class TranslateWidget(QWidget):
         self._prompt_presets = normalize_prompt_presets(saved)
         self._active_prompt_name = active_prompt_name(saved, self._prompt_presets)
         self._system_prompt = prompt_for_name(
+            self._prompt_presets, self._active_prompt_name)
+        self._image_mode = image_mode_for_name(
             self._prompt_presets, self._active_prompt_name)
         self._worker: ChatWorker | None = None
         self._close_pending = False
@@ -253,7 +255,7 @@ class TranslateWidget(QWidget):
         prompt = prompt.strip()
         if not name or not prompt:
             return
-        data = self.settings.load()
+        data = load_prompt_settings(self.settings)
         self._prompt_presets = normalize_prompt_presets(data)
         existing = next((item for item in self._prompt_presets
                          if item["name"] == name), None)
@@ -263,6 +265,7 @@ class TranslateWidget(QWidget):
             existing["prompt"] = prompt
         self._active_prompt_name = name
         self._system_prompt = prompt
+        self._image_mode = image_mode_for_name(self._prompt_presets, name)
         save_prompt_presets(self.settings, self._prompt_presets, name)
         if feedback:
             self._flash_stripe_gray()
@@ -310,6 +313,7 @@ class TranslateWidget(QWidget):
     def _begin_translation(self, text: str, image: QImage | None) -> bool:
         if self._close_pending or self._worker is not None:
             return False
+        self._reload_prompt_presets()
         if self._mode == MODE_DOCKED:
             circle_geometry = self._undocked_circle_geometry()
             self._anchor_center = circle_geometry.center()
@@ -334,7 +338,8 @@ class TranslateWidget(QWidget):
         self._animate_ring(RING_PROCESSING_SMALL, 210)
         self._processing_pulse.start()
         self._worker = ChatWorker(
-            self.base_url, self._system_prompt, text, image, parent=self)
+            self.base_url, self._system_prompt, text, image, parent=self,
+            image_mode=self._image_mode)
         self._worker.result.connect(self._on_result)
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._on_worker_finished)
@@ -603,11 +608,13 @@ class TranslateWidget(QWidget):
         self.update()
 
     def _reload_prompt_presets(self) -> None:
-        data = self.settings.load()
+        data = load_prompt_settings(self.settings)
         self._prompt_presets = normalize_prompt_presets(data)
         self._active_prompt_name = active_prompt_name(
             data, self._prompt_presets)
         self._system_prompt = prompt_for_name(
+            self._prompt_presets, self._active_prompt_name)
+        self._image_mode = image_mode_for_name(
             self._prompt_presets, self._active_prompt_name)
 
     def _show_preset_popup(self, global_pos: QPoint) -> None:
