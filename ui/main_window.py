@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.health_checker: ApiHealthChecker | None = None
         self.bench_runner: BenchmarkRunner | None = None
         self._translate_widget = None
+        self._close_requested = False
 
         # ---- UI ----
         self._build_ui()
@@ -167,6 +168,9 @@ class MainWindow(QMainWindow):
             self._translate_widget.deleteLater()
             self._translate_widget = None
         self.translation_widget_page.set_widget_running(False)
+        if self._close_requested:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self.close)
 
     def open_translate_settings(self) -> None:
         """兼容旧入口：切换到翻译挂件全页设置。"""
@@ -316,9 +320,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
+        self._close_requested = True
         self.app_config.save_params(self.parameters.get_params())
-        if self._translate_widget is not None:
-            self._translate_widget.close()
+        if self._translate_widget is not None and not self._translate_widget.close():
+            event.ignore()
+            return
         if self.bench_runner and self.bench_runner.isRunning():
             self.bench_runner.stop()
             self.bench_runner.wait(8000)

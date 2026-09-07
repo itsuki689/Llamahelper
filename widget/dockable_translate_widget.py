@@ -146,6 +146,7 @@ class TranslateWidget(QWidget):
         self._system_prompt = prompt_for_name(
             self._prompt_presets, self._active_prompt_name)
         self._worker: ChatWorker | None = None
+        self._close_pending = False
         self._image: QImage | None = None
         self._result_text = ""
         self._result_direction = "right"
@@ -307,7 +308,7 @@ class TranslateWidget(QWidget):
         self.update()
 
     def _begin_translation(self, text: str, image: QImage | None) -> bool:
-        if self._worker is not None and self._worker.isRunning():
+        if self._close_pending or self._worker is not None:
             return False
         if self._mode == MODE_DOCKED:
             circle_geometry = self._undocked_circle_geometry()
@@ -336,14 +337,25 @@ class TranslateWidget(QWidget):
             self.base_url, self._system_prompt, text, image, parent=self)
         self._worker.result.connect(self._on_result)
         self._worker.error.connect(self._on_error)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
         return True
 
     def _on_result(self, text: str) -> None:
-        self._show_result(text)
+        if not self._close_pending:
+            self._show_result(text)
 
     def _on_error(self, message: str) -> None:
-        self._show_result(f"翻译失败：{message}")
+        if not self._close_pending:
+            self._show_result(f"翻译失败：{message}")
+
+    def _on_worker_finished(self) -> None:
+        worker = self._worker
+        if worker is not None:
+            self._worker = None
+            worker.deleteLater()
+        if self._close_pending:
+            self.close()
 
     def _show_result(self, text: str) -> None:
         self._processing_pulse.stop()
@@ -1080,6 +1092,11 @@ class TranslateWidget(QWidget):
 
     def closeEvent(self, event) -> None:
         self._processing_pulse.stop()
+        if self._worker is not None:
+            self._close_pending = True
+            self._worker.requestInterruption()
+            event.ignore()
+            return
         self._save_settings()
         self.closed.emit()
         super().closeEvent(event)

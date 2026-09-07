@@ -5,10 +5,11 @@ import base64
 import json
 import re
 import urllib.error
-import urllib.request
+from io import BytesIO
 
-from PySide6.QtCore import QBuffer, QIODevice, QThread, Signal
+from PySide6.QtCore import QBuffer, QEventLoop, QIODevice, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QImage
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
 DEFAULT_TRANSLATE_PROMPT = (
     "You are a professional translation assistant. "
@@ -119,9 +120,13 @@ class ChatWorker(QThread):
     def run(self) -> None:
         try:
             reply = self._request(image_retry=False)
+            if self.isInterruptionRequested():
+                return
             if (self._image is not None
                     and looks_like_untranslated_english(reply)):
                 reply = self._request(image_retry=True)
+                if self.isInterruptionRequested():
+                    return
                 if looks_like_untranslated_english(reply):
                     self.error.emit(
                         "图片翻译仍返回英文，已自动重试一次；"
@@ -131,7 +136,11 @@ class ChatWorker(QThread):
                 self.result.emit(reply)
             else:
                 self.error.emit("模型返回了空内容")
+        except InterruptedError:
+            return
         except urllib.error.HTTPError as e:
+            if self.isInterruptionRequested():
+                return
             detail = ""
             try:
                 detail = e.read().decode("utf-8", errors="replace")[:300]
@@ -139,15 +148,56 @@ class ChatWorker(QThread):
                 pass
             self.error.emit(f"HTTP {e.code}: {detail or e.reason}")
         except Exception as e:  # 网络/解析错误统一上报
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
     def _request(self, image_retry: bool) -> str:
         payload = json.dumps(build_chat_payload(
             self._prompt, self._text, self._image, image_retry=image_retry,
         )).encode("utf-8")
-        req = urllib.request.Request(
-            self._url, data=payload,
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        if self.isInterruptionRequested():
+            raise InterruptedError()
+        # All network objects live in this worker thread. Its event loop lets
+        # cancellation abort even a request waiting indefinitely for headers.
+        manager = QNetworkAccessManager()
+        request = QNetworkRequest(QUrl(self._url))
+        request.setHeader(QNetworkRequest.KnownHeaders.ContentTypeHeader,
+                          "application/json")
+        reply = manager.post(request, payload)
+        loop = QEventLoop()
+        reply.finished.connect(loop.quit)
+        cancel_timer = QTimer()
+        cancel_timer.setInterval(50)
+        cancel_timer.timeout.connect(
+            lambda: reply.abort() if self.isInterruptionRequested() else None)
+        deadline = QTimer()
+        deadline.setSingleShot(True)
+        timed_out = False
+
+        def expire() -> None:
+            nonlocal timed_out
+            timed_out = True
+            reply.abort()
+
+        deadline.timeout.connect(expire)
+        cancel_timer.start()
+        deadline.start(max(1, round(self._timeout * 1000)))
+        try:
+            if not reply.isFinished():
+                loop.exec()
+            if self.isInterruptionRequested():
+                raise InterruptedError()
+            if timed_out:
+                raise TimeoutError("翻译请求超时")
+            body = bytes(reply.readAll())
+            status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+            if status is not None and int(status) >= 400:
+                raise urllib.error.HTTPError(
+                    self._url, int(status), reply.errorString(), {}, BytesIO(body))
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                raise OSError(reply.errorString())
+            data = json.loads(body.decode("utf-8"))
+        finally:
+            cancel_timer.stop()
+            deadline.stop()
         return extract_reply(data)
