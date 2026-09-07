@@ -36,7 +36,7 @@ class ApiHealthChecker(QThread):
     def __init__(self, host: str, port: int, timeout: float = 300.0,
                  parent=None) -> None:
         super().__init__(parent)
-        self._url = f"http://{host}:{port}/health"
+        self._url = ServerParams(host=host, port=port).api_base_url() + "/health"
         self._deadline = timeout
         self._running = True
 

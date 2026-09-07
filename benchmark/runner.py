@@ -246,7 +246,7 @@ class BenchmarkRunner(QThread):
 
     def _wait_ready(self, proc: subprocess.Popen, params: ServerParams,
                     result: dict) -> bool:
-        url = f"http://{params.host}:{params.port}/health"
+        url = params.api_base_url() + "/health"
         deadline = time.monotonic() + self.job.health_timeout
         while time.monotonic() < deadline:
             if self._stop_requested:
@@ -269,7 +269,7 @@ class BenchmarkRunner(QThread):
     def _post_completion(self, params: ServerParams, n_predict: int,
                          timeout: float) -> dict:
         """发送一次 /completion 请求，返回响应 JSON。"""
-        url = f"http://{params.host}:{params.port}/completion"
+        url = params.api_base_url() + "/completion"
         payload = json.dumps({
             "prompt": self.job.prompt,
             "n_predict": n_predict,
@@ -345,7 +345,7 @@ class BenchmarkRunner(QThread):
         audio_path = Path(audio_path)
         b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
         fmt = audio_path.suffix.lstrip(".").lower()
-        url = f"http://{params.host}:{params.port}/v1/chat/completions"
+        url = params.api_base_url() + "/v1/chat/completions"
         payload = json.dumps({
             "messages": [{"role": "user", "content": [
                 {"type": "input_audio",

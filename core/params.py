@@ -5,6 +5,7 @@ import os
 import shlex
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from core.network import http_base_url
 
 # KV cache 可选类型（llama.cpp 支持值）
 KV_CACHE_TYPES = ["f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"]
@@ -155,10 +156,10 @@ class ServerParams:
         return " ".join(parts)
 
     def api_base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return http_base_url(self.host, self.port)
 
     def web_ui_url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
+        return self.api_base_url() + "/"
 
     # ------------------------------------------------------------------
     def validate(self) -> list[str]:

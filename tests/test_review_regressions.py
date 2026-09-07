@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import wave
+import socket
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -11,6 +12,8 @@ from benchmark.runner import BenchJob, BenchmarkRunner
 from core.params import ServerParams
 from config.app_config import AppConfig
 from ui.pages.parameters import ParametersPage
+from core.server_manager import port_in_use
+from ui.main_window import ApiHealthChecker
 
 
 @pytest.fixture(scope="session")
@@ -57,3 +60,24 @@ def test_incomplete_extra_arguments_can_be_restored_and_corrected(qapp, tmp_path
         assert not page.get_params().validate()
     finally:
         page.close()
+
+
+@pytest.mark.parametrize(("host", "expected"), [
+    ("0.0.0.0", "127.0.0.1"), ("::", "[::1]"),
+    ("0:0:0:0:0:0:0:0", "[::1]"), ("::1", "[::1]"),
+    ("[::1]", "[::1]"), ("localhost", "localhost"),
+])
+def test_bind_address_is_normalized_only_for_clients(qapp, host, expected):
+    params = ServerParams(host=host, port=12345)
+    assert params.api_base_url() == f"http://{expected}:12345"
+    assert params.web_ui_url() == params.api_base_url() + "/"
+    assert ApiHealthChecker(host, 12345)._url == params.api_base_url() + "/health"
+    command = params.build_command()
+    assert command[command.index("--host") + 1] == host
+
+
+def test_wildcard_port_probe_detects_listening_server():
+    with socket.socket() as listener:
+        listener.bind(("0.0.0.0", 0))
+        listener.listen(4)
+        assert port_in_use("0.0.0.0", listener.getsockname()[1])

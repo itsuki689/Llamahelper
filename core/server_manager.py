@@ -12,6 +12,7 @@ from dataclasses import replace
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from core.params import ServerParams
+from core.network import client_host
 
 STATE_STOPPED = "stopped"
 STATE_STARTING = "starting"
@@ -22,7 +23,7 @@ STATE_STOPPING = "stopping"
 def port_in_use(host: str, port: int, timeout: float = 0.4) -> bool:
     """检测 TCP 端口是否已被占用。"""
     try:
-        with socket.create_connection((host, port), timeout=timeout):
+        with socket.create_connection((client_host(host), port), timeout=timeout):
             return True
     except OSError:
         return False
