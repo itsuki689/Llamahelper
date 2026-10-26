@@ -96,3 +96,30 @@ python tools/check_lifecycle_results.py build/test-results.xml
   （182.71 秒），挂件启动适配另行复测 **1 passed**。
 - 非 Windows 环境未在本机实际执行；在安装上述依赖后运行同一 pytest 和门禁
   命令复现。真实 llama-server、模型和 GPU 性能不在本轮假服务验证范围内。
+
+### CI 实际暴露的 Qt 6.12 退出异常
+
+第一次推送的 [40277492728](https://github.com/itsuki689/Llamahelper/actions/runs/40277492728)
+使用 PySide6 6.12.0：全部 **153 passed, 0 skipped**，但 pytest 进程汇总后返回
+非零退出码，打包正确地被阻止。在独立的 6.12 环境复现了汇总后的原生访问冲突；
+仅运行既有 `tests/test_widget.py` 也可复现，健康检查模块单独运行正常。
+
+测试会话现在持有唯一 QApplication，直到各模块 fixture 完成；关闭仍保留的测试
+窗口，协作等待其进程和线程结束，断言没有活动资源，再处理 DeferredDelete、回收
+Python 引用并显式销毁 QApplication。这样不再让关闭后的测试窗口及其信号引用
+拖到 Python 解释器退出时销毁，也不忽略 pytest 的进程失败。
+
+复现及检查退出码（Windows PowerShell；依赖安装到独立虚拟环境）：
+
+```powershell
+python -m pip install PySide6==6.12.0 psutil pytest pytest-timeout
+python -m pytest tests/test_widget.py -q --timeout=120
+$LASTEXITCODE
+python -m pytest tests/ -v -ra --timeout=120 --junitxml=build/qt612-results.xml
+$LASTEXITCODE
+python tools/check_lifecycle_results.py build/qt612-results.xml
+```
+
+显式清理后，6.12 挂件模块 **25 passed，进程退出码 0**；6.11.2 的挂件、健康检查
+和门禁兼容回归 **34 passed**。匹配 CI 依赖的 6.12 全量回归 **153 passed,
+0 skipped（183.00 秒），进程退出码 0**，JUnit 门禁通过。

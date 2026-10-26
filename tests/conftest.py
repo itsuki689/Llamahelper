@@ -1,12 +1,56 @@
+import gc
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def qt_application_lifetime():
+    """Keep one application alive, and destroy Qt objects before Python exits.
+
+    Module qapp fixtures borrow this instance. Offscreen windows can remain in
+    Python/Qt signal cycles after close(); leaving them to interpreter shutdown
+    causes a native crash with PySide6 6.12 on Windows.
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent, QProcess, QThread
+    from PySide6.QtWidgets import QApplication
+    from shiboken6 import delete, isValid
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+    windows = list(app.topLevelWidgets())
+    for window in windows:
+        if isValid(window):
+            window.close()
+    deadline = time.monotonic() + 10
+    while True:
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        busy = any(
+            (isinstance(child, QThread) and (child.isRunning() or not child.wait(0)))
+            or (isinstance(child, QProcess)
+                and child.state() != QProcess.ProcessState.NotRunning)
+            for window in windows if isValid(window)
+            for child in window.findChildren(QThread) + window.findChildren(QProcess)
+        )
+        if not busy or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    assert not busy, "Qt test session still owns a running process or thread"
+    for window in app.topLevelWidgets():
+        if isValid(window):
+            window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    gc.collect()
+    delete(app)
 
 
 @pytest.fixture
