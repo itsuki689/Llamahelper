@@ -1,6 +1,7 @@
 """GUI smoke 测试：offscreen 平台下验证主窗口、参数生成、配置保存。"""
 from __future__ import annotations
 
+import csv
 import time
 from pathlib import Path
 
@@ -218,19 +219,45 @@ def test_wheel_guard(window):
     assert spin.value() == before  # 未聚焦滚轮不生效
 
 
-def test_benchmark_asr_mode_ui(window, monkeypatch):
+def test_benchmark_asr_mode_ui(window, monkeypatch, tmp_path):
     monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
     bp = window.benchmark
     assert bp._current_mode() == "gen"
     assert bp.prompt_box.isVisibleTo(bp)
     assert not bp.audio_box.isVisibleTo(bp)
-    bp.combo_mode.setCurrentText("ASR 语音识别（RTF）")
+    bp.combo_mode.setCurrentText("ASR 语音识别（RTFx）")
     assert bp.audio_box.isVisibleTo(bp)
     assert not bp.prompt_box.isVisibleTo(bp)
     assert not bp.tokens_box.isVisibleTo(bp)
     bp._on_run()
     from ui.pages.benchmark_page import ASR_COLUMNS
     assert bp.table.columnCount() == len(ASR_COLUMNS)
+    assert bp.table.horizontalHeaderItem(2).text() == "平均 RTFx"
+    assert "RTFx = 音频时长 / 识别耗时（越大越快）" in bp._audio_hint.text()
+
+    for value, rtfx in ((16, 4.0), (32, 8.0)):
+        bp.on_run_result({
+            "label": f"n_cpu_moe={value}", "field": "n_cpu_moe", "value": value,
+            "gen_tps": 0.0, "prompt_tps": 0.0, "rtfx": rtfx,
+            "audio_s": 12.0, "infer_s": 12.0 / rtfx, "asr_files": 1,
+            "vram_peak_mb": 0.0, "power_peak_w": 0.0, "ram_peak_mb": 0.0,
+            "ok": True, "status": "OK", "error": "",
+        })
+    # The larger inverse factor remains faster; table and completion agree.
+    assert bp.table.item(0, 1).text() == "n_cpu_moe=32"
+    assert bp.table.item(0, 2).text() == "8.00"
+    bp.on_finished_all()
+    assert "n_cpu_moe=32 @ RTFx 8.00" in bp.progress_label.text()
+
+    exported = tmp_path / "asr.csv"
+    monkeypatch.setattr("ui.pages.benchmark_page.QFileDialog.getSaveFileName",
+                        lambda *args: (str(exported), "CSV 文件 (*.csv)"))
+    bp._export_csv()
+    with exported.open(encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        assert "RTFx" in reader.fieldnames and "rtf" not in reader.fieldnames
+        rows = list(reader)
+    assert [row["RTFx"] for row in rows] == ["4.00", "8.00"]
 
 
 def test_threads_batch_sweep_available():

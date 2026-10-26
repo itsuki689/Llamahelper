@@ -29,10 +29,11 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
   generation/prompt tok/s、显存峰值、功耗峰值、RAM 峰值、OOM / 启动失败 →
   关闭服务。结果表格按 generation tok/s 排名并标记最快配置，可导出 CSV。
   另支持 **ASR 语音识别模型模式**（如 Qwen3-ASR-1.7B）：不以生成速度排名，
-  改用 **RTF（Real-Time Factor）= 音频时长 ÷ 识别耗时**（越大越好）；
+  改用 **RTFx（Inverse Real-Time Factor）= 音频时长 ÷ 识别耗时**（越大越好）；
+  它是普通 RTF（识别耗时 ÷ 音频时长，越小越好）的倒数。
   参考音频（wav / flac / mp3）由用户放入指定目录（默认程序目录 `benchmark_audio/`），
   音频经 `/v1/chat/completions` 的 `input_audio`（base64）发送，逐文件识别并
-  计时，先用首个文件预热一轮，表格按平均 RTF 排名。
+  计时，先用首个文件预热一轮，表格按平均 RTFx 排名，CSV 指标列名为 `RTFx`。
 - **Logs**：QProcess 实时输出 stdout/stderr，按级别着色（错误红 / 警告黄 /
   性能绿 / 加载蓝），自动滚动可暂停，可保存。
 - **Presets**：多组 JSON 预设（默认含 Qwen35B Balanced / Max Speed /

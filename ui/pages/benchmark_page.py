@@ -2,7 +2,7 @@
 
 两种模式：
 - gen：生成模型，指标为 generation tok/s（越高越快）
-- asr：语音识别模型（如 Qwen3-ASR），指标为 RTF = 音频时长 / 识别耗时
+- asr：语音识别模型（如 Qwen3-ASR），指标为 RTFx = 音频时长 / 识别耗时
   （越高越快），参考音频由用户放入指定目录（wav/flac/mp3）
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from ui.widgets import guard_wheel_children
 
 GEN_COLUMNS = ["排名", "配置", "Gen tok/s", "Prompt tok/s",
                "VRAM 峰值 MB", "功耗峰值 W", "RAM 峰值 MB", "状态"]
-ASR_COLUMNS = ["排名", "配置", "平均 RTF", "音频总时长 s", "识别总耗时 s",
+ASR_COLUMNS = ["排名", "配置", "平均 RTFx", "音频总时长 s", "识别总耗时 s",
                "VRAM 峰值 MB", "功耗峰值 W", "RAM 峰值 MB", "状态"]
 
 
@@ -35,7 +35,7 @@ class BenchmarkPage(QWidget):
     run_requested = Signal(object)   # BenchJob
     stop_requested = Signal()
 
-    MODES = {"生成模型（tok/s）": "gen", "ASR 语音识别（RTF）": "asr"}
+    MODES = {"生成模型（tok/s）": "gen", "ASR 语音识别（RTFx）": "asr"}
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -112,7 +112,7 @@ class BenchmarkPage(QWidget):
         row_audio.addWidget(self.audio_edit, 1)
         row_audio.addWidget(btn_audio)
         cl.addWidget(self.audio_box)
-        audio_hint = QLabel("RTF = 音频时长 / 识别耗时（越大越快）；"
+        audio_hint = QLabel("RTFx = 音频时长 / 识别耗时（越大越快）；"
                             "每轮先预热一次再逐文件测量；支持 wav / flac / mp3")
         audio_hint.setStyleSheet(f"color: {GRAY}; font-size: 11px;")
         cl.addWidget(audio_hint)
@@ -226,7 +226,7 @@ class BenchmarkPage(QWidget):
 
     @staticmethod
     def _metric_of(result: dict, mode: str) -> float:
-        return result["rtf"] if mode == "asr" else result["gen_tps"]
+        return result["rtfx"] if mode == "asr" else result["gen_tps"]
 
     def set_running(self, running: bool) -> None:
         self.btn_run.setEnabled(not running)
@@ -259,7 +259,7 @@ class BenchmarkPage(QWidget):
         if ok:
             best = max(ok, key=lambda r: self._metric_of(r, self._mode))
             if self._mode == "asr":
-                text = f"完成 ✓ 最快: {best['label']} @ RTF {best['rtf']:.2f}"
+                text = f"完成 ✓ 最快: {best['label']} @ RTFx {best['rtfx']:.2f}"
             else:
                 text = f"完成 ✓ 最快: {best['label']} @ {best['gen_tps']:.2f} tok/s"
             self.progress_label.setText(text)
@@ -274,7 +274,7 @@ class BenchmarkPage(QWidget):
                 f"{r['ram_peak_mb']:.0f}" if r["ram_peak_mb"] else "--",
                 r["status"]]
         if self._mode == "asr":
-            perf = [f"{r['rtf']:.2f}" if r["ok"] else "--",
+            perf = [f"{r['rtfx']:.2f}" if r["ok"] else "--",
                     f"{r['audio_s']:.1f}" if r["ok"] else "--",
                     f"{r['infer_s']:.1f}" if r["ok"] else "--"]
         else:
@@ -320,13 +320,13 @@ class BenchmarkPage(QWidget):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(["label", "field", "value", "gen_tps",
-                             "prompt_tps", "rtf", "audio_s", "infer_s",
+                             "prompt_tps", "RTFx", "audio_s", "infer_s",
                              "asr_files", "vram_peak_mb", "power_peak_w",
                              "ram_peak_mb", "status", "error"])
             for r in self._results:
                 writer.writerow([r["label"], r["field"], r["value"],
                                  f"{r['gen_tps']:.2f}", f"{r['prompt_tps']:.2f}",
-                                 f"{r.get('rtf', 0.0):.2f}",
+                                 f"{r.get('rtfx', 0.0):.2f}",
                                  f"{r.get('audio_s', 0.0):.1f}",
                                  f"{r.get('infer_s', 0.0):.1f}",
                                  r.get("asr_files", 0),

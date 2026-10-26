@@ -2,7 +2,7 @@
 
 gen 模式：启动进程 → 等待 /health 就绪 → 预热 → POST /completion 生成固定
 token → 记录 generation/prompt tok/s、显存/功耗/RAM 峰值 → 关闭进程。
-asr 模式：对目录中的每段参考音频发识别请求，RTF = 音频时长 / 识别耗时。
+asr 模式：对目录中的每段参考音频发识别请求，RTFx = 音频时长 / 识别耗时。
 全部在 QThread 中执行，不阻塞 UI。
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ DEFAULT_TEST_PROMPT = (
 @dataclass
 class BenchJob:
     base_params: ServerParams
-    mode: str = "gen"                # "gen"（生成 tok/s）| "asr"（语音识别 RTF）
+    mode: str = "gen"                # "gen"（生成 tok/s）| "asr"（语音识别 RTFx）
     sweep_field: str = "n_cpu_moe"   # 扫描目标（见 SWEEP_FIELDS）
     sweep_start: int = 48
     sweep_end: int = 16
@@ -150,8 +150,8 @@ class BenchmarkRunner(QThread):
             "value": overrides.get(self.job.sweep_field, ""),
             "cpu_moe": overrides.get("cpu_moe", False),
             "gen_tps": 0.0, "prompt_tps": 0.0,
-            # ASR 模式指标：RTF = 音频总时长 / 识别总耗时（越大越快）
-            "rtf": 0.0, "audio_s": 0.0, "infer_s": 0.0, "asr_files": 0,
+            # ASR 模式指标：RTFx = 音频总时长 / 识别总耗时（越大越快）
+            "rtfx": 0.0, "audio_s": 0.0, "infer_s": 0.0, "asr_files": 0,
             "vram_peak_mb": 0.0, "power_peak_w": 0.0, "ram_peak_mb": 0.0,
             "ok": False, "status": "失败", "error": "",
         }
@@ -338,7 +338,7 @@ class BenchmarkRunner(QThread):
             result["error"] = "响应中缺少 timings 数据"
 
     # ------------------------------------------------------------------
-    # ASR 模式：RTF = 音频时长 / 识别耗时
+    # ASR 模式：RTFx = 音频时长 / 识别耗时
     def _post_audio(self, params: ServerParams, audio_path,
                     timeout: float = 300.0) -> None:
         """发送一次音频识别请求（OpenAI 兼容 input_audio），返回 None。"""
@@ -423,17 +423,17 @@ class BenchmarkRunner(QThread):
             done += 1
             self.sig_log.emit(
                 f"[bench] {f.name}: 音频 {dur:.2f}s / 识别 {elapsed:.2f}s "
-                f"= RTF {dur / elapsed:.2f}")
+                f"= RTFx {dur / elapsed:.2f}")
 
         if done and total_infer > 0:
-            result["rtf"] = total_audio / total_infer
+            result["rtfx"] = total_audio / total_infer
             result["audio_s"] = total_audio
             result["infer_s"] = total_infer
             result["asr_files"] = done
             result["ok"] = True
             result["status"] = "OK"
             self.sig_log.emit(
-                f"[bench] {result['label']}: 平均 RTF {result['rtf']:.2f} "
+                f"[bench] {result['label']}: 平均 RTFx {result['rtfx']:.2f} "
                 f"({done} 个文件)")
         elif not result["error"]:
             result["error"] = "没有成功识别的音频文件"

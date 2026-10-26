@@ -1,4 +1,4 @@
-"""ASR Benchmark（RTF 模式）测试：音频时长解析 + 端到端一轮测量。"""
+"""ASR Benchmark（RTFx 模式）测试：音频时长解析 + 端到端一轮测量。"""
 from __future__ import annotations
 
 import math
@@ -128,8 +128,8 @@ def test_benchmark_asr_one_round(fake_exe, tmp_path):
     assert r["asr_files"] == 2
     assert abs(r["audio_s"] - 3.0) < 0.01   # 1s + 2s
     assert r["infer_s"] > 0
-    assert r["rtf"] > 0
-    assert math.isclose(r["rtf"], r["audio_s"] / r["infer_s"], rel_tol=1e-6)
+    assert r["rtfx"] > 0
+    assert math.isclose(r["rtfx"], r["audio_s"] / r["infer_s"], rel_tol=1e-6)
     assert not port_in_use("127.0.0.1", port)
 
 
