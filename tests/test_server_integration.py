@@ -83,12 +83,12 @@ def test_server_start_logs_stop(qapp, fake_exe):
 
     assert mgr.start(make_params(fake_exe, port))
     assert mgr.state == STATE_STARTING
-    assert mgr.pid() > 0
+    assert pump_until(lambda: mgr.pid() > 0)
 
     # 等待假服务器输出监听日志
     assert pump_until(lambda: any("server_listen" in l for l in logs))
     # 模拟 UI 健康检查通过
-    mgr.mark_running()
+    mgr.mark_running(mgr.generation)
     assert mgr.state == STATE_RUNNING
 
     # 防重复启动

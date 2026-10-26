@@ -10,7 +10,9 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+import psutil
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QProcess, QThread
 from shiboken6 import isValid
 
 import ui.main_window as mw
@@ -21,7 +23,8 @@ from widget.api_client import ChatWorker
 from widget.settings import WidgetSettings
 from benchmark.runner import BenchJob, BenchmarkRunner
 from core.params import ServerParams
-from core.server_manager import STATE_RUNNING, STATE_STOPPED, port_in_use
+from core.api_health import ApiHealthChecker
+from core.server_manager import STATE_RUNNING, STATE_STARTING, STATE_STOPPED, port_in_use
 
 
 @pytest.fixture(scope="session")
@@ -210,7 +213,7 @@ def test_completion_signal_does_not_destroy_a_running_benchmark(window, tmp_path
 def test_restart_checks_new_process_and_restores_dashboard(window, tmp_path, monkeypatch, change_port):
     _, port = configure_fake_server(window, tmp_path, monkeypatch)
     launched_ports = []
-    window.server.process_started.connect(lambda p: launched_ports.append(p.port))
+    window.server.process_started.connect(lambda _generation, p: launched_ports.append(p.port))
     window._start_server()
     assert pump_until(lambda: window.server.state == STATE_RUNNING)
     first_pid = window.server.pid()
@@ -233,16 +236,147 @@ def test_restart_checks_new_process_and_restores_dashboard(window, tmp_path, mon
     assert pump_until(lambda: window.server.state == STATE_STOPPED, timeout=8)
 
 
-def test_stale_health_result_cannot_mark_new_process_ready(window, monkeypatch):
-    # Model a queued result arriving after its checker was replaced.
-    monkeypatch.setattr(mw.ApiHealthChecker, "start", lambda self: None)
-    marked = []
-    monkeypatch.setattr(window.server, "mark_running", lambda: marked.append(True))
-    window._start_health_check(ServerParams(port=8080))
-    old_checker = window.health_checker
-    window._start_health_check(ServerParams(port=8081))
-    new_checker = window.health_checker
-    old_checker.ready.emit()
-    assert not marked
+@pytest.mark.parametrize("late_result", ["ready", "failed"])
+def test_stale_health_result_cannot_change_new_launch(window, tmp_path, monkeypatch, late_result):
+    configure_fake_server(window, tmp_path, monkeypatch)
+    # Hold results so the test controls their order across two real processes.
+    monkeypatch.setattr(ApiHealthChecker, "start", lambda self: None)
+    window._start_server()
+    assert pump_until(lambda: window.lifecycle.health_checker is not None)
+    old_checker = window.lifecycle.health_checker
+    old_generation = window.server.generation
+    window.lifecycle.restart(window.parameters.get_params())
+    assert pump_until(lambda: window.lifecycle.health_checker not in (None, old_checker))
+    new_checker = window.lifecycle.health_checker
+
+    def emit_late():
+        if late_result == "ready":
+            old_checker.ready.emit()
+        else:
+            old_checker.failed.emit("old failure")
+
+    emit_late()
+    assert window.server.state == STATE_STARTING
+    assert not window.server.mark_running(old_generation)
+    assert not window.dashboard.btn_webui.isEnabled()
     new_checker.ready.emit()
-    assert marked == [True]
+    assert window.server.state == STATE_RUNNING
+    emit_late()
+    assert window.server.state == STATE_RUNNING
+    assert "old failure" not in window.logs.view.toPlainText()
+
+
+def test_stop_during_start_rejects_late_success(window, tmp_path, monkeypatch):
+    _, port = configure_fake_server(window, tmp_path, monkeypatch)
+    monkeypatch.setattr(ApiHealthChecker, "start", lambda self: None)
+    states = []
+    window.server.state_changed.connect(states.append)
+    window._start_server()
+    assert pump_until(lambda: window.lifecycle.health_checker is not None)
+    checker = window.lifecycle.health_checker
+    pid = window.server.pid()
+    window.dashboard.btn_stop.click()
+    checker.ready.emit()
+    assert pump_until(lambda: window.server.state == STATE_STOPPED)
+    checker.ready.emit()
+    assert STATE_RUNNING not in states
+    assert not psutil.pid_exists(pid)
+    assert not port_in_use("127.0.0.1", port)
+    assert window.dashboard.btn_start.isEnabled()
+    assert not window.dashboard.btn_copy.isEnabled()
+
+
+def test_start_uses_snapshot_for_health_and_addresses(window, tmp_path, monkeypatch):
+    _, port = configure_fake_server(window, tmp_path, monkeypatch)
+    monkeypatch.setattr(ApiHealthChecker, "start", lambda self: None)
+    window._start_server()
+    params = window.parameters.get_params()
+    params.port = port + 1 if port < 65535 else port - 1
+    params.model_path = str(tmp_path / "edited-model.gguf")
+    window.parameters.set_params(params)
+    assert pump_until(lambda: window.lifecycle.health_checker is not None)
+    checker = window.lifecycle.health_checker
+    assert checker._url == f"http://127.0.0.1:{port}/health"
+    snapshot = window.server.launch_params
+    snapshot.port = params.port  # Callers also receive a defensive copy.
+    checker.ready.emit()
+    assert window.server.state == STATE_RUNNING
+    assert window.dashboard._api_url == f"http://127.0.0.1:{port}/v1"
+    assert window.dashboard._web_url == f"http://127.0.0.1:{port}/"
+    assert f"API 就绪: http://127.0.0.1:{port}" in window.logs.view.toPlainText()
+
+
+def test_checker_finishes_without_result_recovers(window, tmp_path, monkeypatch):
+    configure_fake_server(window, tmp_path, monkeypatch)
+    monkeypatch.setattr(ApiHealthChecker, "run", lambda self: None)
+    window._start_server()
+    assert pump_until(lambda: window.server.state == STATE_STOPPED)
+    assert "健康检查提前结束" in window.logs.view.toPlainText()
+    assert window.dashboard.btn_start.isEnabled()
+
+
+def test_health_timeout_allows_another_start(window, tmp_path, monkeypatch):
+    _, port = configure_fake_server(window, tmp_path, monkeypatch)
+    window.lifecycle.health_timeout = 0
+    window._start_server()
+    assert pump_until(lambda: window.server.state == STATE_STOPPED, timeout=8)
+    assert "等待 API 就绪超时" in window.logs.view.toPlainText()
+    assert window.server._proc is None
+    assert not port_in_use("127.0.0.1", port)
+    assert window.dashboard.btn_start.isEnabled()
+    window.lifecycle.health_timeout = 10
+    window.dashboard.btn_start.click()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING)
+    assert window.dashboard.btn_webui.isEnabled()
+
+
+def test_old_process_signals_cannot_retire_or_kill_new_process(window, tmp_path, monkeypatch):
+    configure_fake_server(window, tmp_path, monkeypatch)
+    window._start_server()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING)
+    old_proc, old_timer = window.server._proc, window.server._kill_timer
+    # Keep the retired QObject alive to inject delayed signals deterministically.
+    monkeypatch.setattr(old_proc, "deleteLater", lambda: None)
+    window.dashboard.btn_restart.click()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING, timeout=10)
+    new_proc = window.server._proc
+    old_timer.timeout.emit()
+    old_proc.started.emit()
+    old_proc.errorOccurred.emit(QProcess.ProcessError.FailedToStart)
+    old_proc.finished.emit(1, QProcess.ExitStatus.CrashExit)
+    assert window.server._proc is new_proc
+    assert new_proc.state() == QProcess.ProcessState.Running
+    assert window.server.state == STATE_RUNNING
+
+
+def test_explicit_stop_cancels_pending_restart(window, tmp_path, monkeypatch):
+    configure_fake_server(window, tmp_path, monkeypatch)
+    window._start_server()
+    assert pump_until(lambda: window.server.state == STATE_RUNNING)
+    generation = window.server.generation
+    window.dashboard.btn_restart.click()
+    window.dashboard.btn_stop.click()
+    assert pump_until(lambda: window.server.state == STATE_STOPPED)
+    assert window.server.generation == generation
+    assert window.server._pending_restart is None
+
+
+@pytest.mark.parametrize("wait_for_process", [False, True])
+def test_close_server_reaps_process_and_threads(window, tmp_path, monkeypatch, wait_for_process):
+    _, port = configure_fake_server(window, tmp_path, monkeypatch)
+    window._start_server()
+    pid = window.server.pid()
+    if wait_for_process:
+        assert pump_until(lambda: window.server.state == STATE_RUNNING)
+        pid = window.server.pid()
+    started = time.monotonic()
+    window.close()
+    assert time.monotonic() - started < 0.5
+    assert pump_until(lambda: not window.isVisible(), timeout=8)
+    assert window.server.state == STATE_STOPPED
+    assert window.server._proc is None
+    assert not port_in_use("127.0.0.1", port)
+    if pid:
+        assert not psutil.pid_exists(pid)
+    assert all(not t.isRunning() and t.wait(0) for t in window.findChildren(QThread))
+    assert not window.lifecycle.start(window.parameters.get_params())

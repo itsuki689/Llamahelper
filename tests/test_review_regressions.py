@@ -19,7 +19,7 @@ from config.app_config import AppConfig
 from config.presets import PresetManager
 from ui.pages.parameters import ParametersPage
 from core.server_manager import port_in_use
-from ui.main_window import ApiHealthChecker
+from core.api_health import ApiHealthChecker
 from monitoring.system_monitor import SystemMonitor
 from widget.api_client import ChatWorker
 from widget.dockable_translate_widget import TranslateWidget

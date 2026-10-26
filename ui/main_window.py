@@ -1,11 +1,7 @@
 """主窗口：侧边导航 + 页面栈 + 各模块信号接线。"""
 from __future__ import annotations
 
-import time
-import urllib.error
-import urllib.request
-
-from PySide6.QtCore import QEvent, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
@@ -17,7 +13,8 @@ from config.app_config import AppConfig
 from config.presets import PresetManager
 from core.params import ServerParams
 from core.perf_parser import parse_perf_line
-from core.server_manager import STATE_RUNNING, STATE_STARTING, STATE_STOPPED, ServerManager
+from core.server_manager import STATE_STOPPED, ServerManager
+from core.server_lifecycle import ServerLifecycle
 from monitoring.gpu_monitor import GpuMonitor
 from monitoring.system_monitor import SystemMonitor
 from ui.pages.benchmark_page import BenchmarkPage
@@ -26,38 +23,6 @@ from ui.pages.logs_page import LogsPage
 from ui.pages.parameters import ParametersPage
 from ui.pages.presets_page import PresetsPage
 from ui.pages.translation_widget_page import TranslationWidgetPage
-
-
-class ApiHealthChecker(QThread):
-    """后台轮询 /health，确认 llama-server API 就绪，不阻塞 UI。"""
-
-    ready = Signal()
-    failed = Signal(str)
-
-    def __init__(self, host: str, port: int, timeout: float = 300.0,
-                 parent=None) -> None:
-        super().__init__(parent)
-        self._url = ServerParams(host=host, port=port).api_base_url() + "/health"
-        self._deadline = timeout
-        self._running = True
-
-    def stop(self) -> None:
-        self._running = False
-
-    def run(self) -> None:
-        end = time.monotonic() + self._deadline
-        while self._running and time.monotonic() < end:
-            try:
-                with urllib.request.urlopen(self._url, timeout=2) as resp:
-                    if resp.status == 200:
-                        if self._running:
-                            self.ready.emit()
-                        return
-            except (urllib.error.URLError, OSError):
-                pass
-            time.sleep(0.5)
-        if self._running:
-            self.failed.emit("等待 API 就绪超时")
 
 
 class WindowDragLabel(QLabel):
@@ -98,7 +63,7 @@ class MainWindow(QMainWindow):
         self.app_config = AppConfig()
         self.preset_manager = PresetManager()
         self.server = ServerManager(self)
-        self.health_checker: ApiHealthChecker | None = None
+        self.lifecycle = ServerLifecycle(self.server, self)
         self.bench_runner: BenchmarkRunner | None = None
         self._translate_widget = None
         self._close_requested = False
@@ -274,12 +239,11 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         # 服务控制
         self.dashboard.start_clicked.connect(self._start_server)
-        self.dashboard.stop_clicked.connect(self.server.stop)
-        self.dashboard.restart_clicked.connect(
-            lambda: self.server.restart(self.parameters.get_params()))
+        self.dashboard.stop_clicked.connect(self.lifecycle.stop)
+        self.dashboard.restart_clicked.connect(self._restart_server)
         # 进程状态
         self.server.state_changed.connect(self._on_server_state)
-        self.server.process_started.connect(self._start_health_check)
+        self.lifecycle.log_line.connect(self._on_log_line)
         self.server.pid_changed.connect(self._on_pid_changed)
         self.server.start_failed.connect(self._on_start_failed)
         self.server.exited_unexpectedly.connect(self._on_unexpected_exit)
@@ -300,52 +264,27 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _start_server(self) -> None:
+        self._launch_server(restart=False)
+
+    def _restart_server(self) -> None:
+        self._launch_server(restart=True)
+
+    def _launch_server(self, *, restart: bool) -> None:
+        if self._close_requested:
+            return
         params = self.parameters.get_params()
         errors = params.validate()
         if errors:
             QMessageBox.warning(self, "无法启动", "\n".join(errors))
             return
         self.app_config.save_params(params)
-        self.server.start(params)
-
-    def _start_health_check(self, params: ServerParams) -> None:
-        self._stop_health_check()
-        if self._close_requested:
-            return
-        self.health_checker = ApiHealthChecker(params.host, params.port, parent=self)
-        self.health_checker.ready.connect(self._on_api_ready)
-        self.health_checker.failed.connect(self._on_health_failed)
-        self.health_checker.finished.connect(self._on_health_check_finished)
-        self.health_checker.start()
-
-    def _stop_health_check(self) -> None:
-        checker = self.health_checker
-        self.health_checker = None
-        if checker is not None:
-            checker.stop()
-
-    def _on_health_check_finished(self) -> None:
-        checker = self.sender()
-        if checker is self.health_checker:
-            self.health_checker = None
-        checker.deleteLater()
-
-    def _on_api_ready(self) -> None:
-        if self.sender() is not self.health_checker or self._close_requested:
-            return
-        self.server.mark_running()
-        p = self.parameters.get_params()
-        self._on_log_line(f"[*] API 就绪: {p.api_base_url()}")
-
-    def _on_health_failed(self, msg: str) -> None:
-        if (self.sender() is self.health_checker
-                and self.server.state == STATE_STARTING):
-            self._on_log_line(f"[!] {msg}")
+        if restart:
+            self.lifecycle.restart(params)
+        else:
+            self.lifecycle.start(params)
 
     def _on_server_state(self, state: str) -> None:
-        if state not in (STATE_STARTING, STATE_RUNNING):
-            self._stop_health_check()
-        p = self.parameters.get_params()
+        p = self.server.launch_params or ServerParams()
         self.dashboard.set_server_state(
             state, pid=self.server.pid(),
             addr=p.web_ui_url(), api_url=p.api_base_url() + "/v1")
@@ -356,7 +295,8 @@ class MainWindow(QMainWindow):
 
     def _on_start_failed(self, msg: str) -> None:
         self._on_log_line(f"[!] 启动失败: {msg}")
-        QMessageBox.warning(self, "启动失败", msg)
+        if not self._close_requested:
+            QMessageBox.warning(self, "启动失败", msg)
 
     def _on_unexpected_exit(self, code: int) -> None:
         # 仅提示，GUI 不受影响
@@ -382,7 +322,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _start_benchmark(self, job: BenchJob) -> None:
-        if self.server.is_running():
+        if self.server.state != STATE_STOPPED:
             QMessageBox.warning(self, "Benchmark",
                                 "请先停止正在运行的 llama-server 再执行基准测试。")
             self.benchmark.set_running(False)
@@ -434,9 +374,7 @@ class MainWindow(QMainWindow):
             self._translate_widget.close()
         if self.bench_runner and self.bench_runner.isRunning():
             self.bench_runner.stop()
-        for checker in self.findChildren(ApiHealthChecker):
-            checker.stop()
-        self.server.shutdown()
+        self.lifecycle.shutdown()
         self.gpu_monitor.stop()
         self.sys_monitor.stop()
         threads_busy = any(thread.isRunning() or not thread.wait(0)
