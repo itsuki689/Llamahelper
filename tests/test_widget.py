@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import socket
-import stat
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -30,6 +28,7 @@ from widget.prompt_presets import (
     active_prompt_name, normalize_prompt_presets, save_prompt_presets,
 )
 from ui.pages.translation_widget_page import TranslationWidgetPage
+from core.params import ServerParams
 
 FAKE_SERVER = Path(__file__).parent / "fake_llama_server.py"
 
@@ -444,14 +443,14 @@ def test_dock_preset_selection_flashes_stripe_gray(qapp, tmp_path):
     w.close()
 
 
-def test_widget_translate_e2e(qapp, tmp_path):
+def test_widget_translate_e2e(qapp, tmp_path, fake_exe):
     """起假服务器，挂件走完整翻译流程并显示结果。"""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     proc = subprocess.Popen(
-        [sys.executable, str(FAKE_SERVER), "--host", "127.0.0.1",
-         "--port", str(port)],
+        ServerParams(llama_server_path=str(fake_exe), model_path=str(FAKE_SERVER),
+                     host="127.0.0.1", port=port).build_command(),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         # 等服务就绪

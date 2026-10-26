@@ -1,16 +1,13 @@
 """集成测试：用假 llama-server 验证进程启停、日志解析、端口检测与 Benchmark。"""
 from __future__ import annotations
 
-import os
 import socket
-import stat
-import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
 
-pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from benchmark.runner import BenchJob, BenchmarkRunner, build_config_list
@@ -25,18 +22,6 @@ FAKE_SERVER = Path(__file__).parent / "fake_llama_server.py"
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
-
-
-@pytest.fixture()
-def fake_exe(tmp_path) -> Path:
-    """生成一个可执行的假 llama-server 启动脚本（仅 POSIX：依赖 shebang）。"""
-    if sys.platform == "win32":
-        pytest.skip("假服务器启动脚本依赖 POSIX shebang，Windows 上跳过进程类测试")
-    launcher = tmp_path / "fake_llama_server"
-    launcher.write_text(
-        f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SERVER}" "$@"\n')
-    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
-    return launcher
 
 
 def free_port() -> int:
@@ -63,6 +48,14 @@ def make_params(fake_exe: Path, port: int, **kw) -> ServerParams:
         host="127.0.0.1", port=port, **kw)
 
 
+@pytest.fixture
+def manager(qapp):
+    mgr = ServerManager()
+    yield mgr
+    mgr.shutdown()
+    assert pump_until(lambda: mgr.state == STATE_STOPPED, timeout=8)
+
+
 # ---------------------------------------------------------------------
 def test_port_in_use_detection():
     port = free_port()
@@ -73,9 +66,9 @@ def test_port_in_use_detection():
         assert port_in_use("127.0.0.1", port)
 
 
-def test_server_start_logs_stop(qapp, fake_exe):
+def test_server_start_logs_stop(manager, fake_exe):
     port = free_port()
-    mgr = ServerManager()
+    mgr = manager
     logs: list[str] = []
     mgr.log_line.connect(logs.append)
     states: list[str] = []
@@ -100,9 +93,9 @@ def test_server_start_logs_stop(qapp, fake_exe):
     assert STATE_STOPPING in states
 
 
-def test_server_unexpected_exit_no_crash(qapp, fake_exe):
+def test_server_unexpected_exit_no_crash(manager, fake_exe):
     port = free_port()
-    mgr = ServerManager()
+    mgr = manager
     unexpected: list[int] = []
     mgr.exited_unexpectedly.connect(unexpected.append)
     assert mgr.start(make_params(fake_exe, port))
@@ -113,9 +106,9 @@ def test_server_unexpected_exit_no_crash(qapp, fake_exe):
     assert unexpected, "意外退出应发出 exited_unexpectedly 信号"
 
 
-def test_start_with_occupied_port_fails(qapp, fake_exe):
+def test_start_with_occupied_port_fails(manager, fake_exe):
     port = free_port()
-    mgr = ServerManager()
+    mgr = manager
     failures: list[str] = []
     mgr.start_failed.connect(failures.append)
     with socket.socket() as s:
@@ -123,6 +116,21 @@ def test_start_with_occupied_port_fails(qapp, fake_exe):
         s.listen(1)
         assert not mgr.start(make_params(fake_exe, port))
     assert failures and "占用" in failures[0]
+
+
+def test_fake_server_can_exit_cleanly(manager, fake_exe):
+    port = free_port()
+    logs, exits = [], []
+    manager.log_line.connect(logs.append)
+    manager.exited_unexpectedly.connect(exits.append)
+    assert manager.start(make_params(fake_exe, port))
+    assert pump_until(lambda: any("server_listen" in line for line in logs))
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/shutdown", timeout=2):
+        pass
+    assert pump_until(lambda: manager.state == STATE_STOPPED)
+    assert exits == [0]  # Even an unrequested clean exit must leave starting.
+    assert "fake server: stopped" in logs
+    assert not port_in_use("127.0.0.1", port)
 
 
 # ---------------------------------------------------------------------

@@ -70,10 +70,11 @@ def stalled_server():
 
 
 @pytest.fixture
-def window(qapp, tmp_path, monkeypatch):
+def window(qapp, tmp_path, monkeypatch, fake_exe):
     monkeypatch.setattr(mw, "AppConfig", lambda: AppConfig(tmp_path / "app.json"))
     monkeypatch.setattr(mw, "PresetManager", lambda: PresetManager(tmp_path / "presets.json"))
     monkeypatch.setattr(dock, "WidgetSettings", lambda: WidgetSettings(tmp_path / "widget.json"))
+    monkeypatch.setattr("monitoring.gpu_monitor.query_gpu", lambda: None)
     window = mw.MainWindow()
     window.show()
     yield window
@@ -142,13 +143,9 @@ def configure_fake_server(window, tmp_path, monkeypatch):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    # Invoke Python explicitly so the process tests run on Windows as well.
-    monkeypatch.setattr(ServerParams, "build_command", lambda p: [
-        sys._base_executable, str(fake_server), "--host", p.host,
-        "--port", str(p.port), "--stall-post", str(marker),
-    ])
     window.parameters.set_params(ServerParams(
-        llama_server_path=sys._base_executable, model_path=str(fake_server), port=port))
+        llama_server_path=sys._base_executable, model_path=str(fake_server), port=port,
+        extra_args=f'--stall-post "{marker}"'))
     return marker, port
 
 
