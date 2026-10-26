@@ -399,7 +399,10 @@ class ParametersPage(QWidget):
     def _refresh_preview(self) -> None:
         p = self.get_params()
         if p.llama_server_path and p.model_path:
-            self.cmd_preview.setPlainText(p.command_display())
+            try:
+                self.cmd_preview.setPlainText(p.command_display())
+            except ValueError as exc:
+                self.cmd_preview.setPlainText(f"# 额外参数格式错误: {exc}")
         else:
             self.cmd_preview.setPlainText(
                 "# 请先选择 llama-server 可执行文件和 GGUF 模型")

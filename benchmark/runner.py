@@ -107,9 +107,18 @@ class BenchmarkRunner(QThread):
         super().__init__(parent)
         self.job = job
         self._stop_requested = False
+        self._stop_event = threading.Event()
+        self._proc_lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._request_threads: list[threading.Thread] = []
 
     def stop(self) -> None:
         self._stop_requested = True
+        self._stop_event.set()
+        # Closing our benchmark child's connections also unblocks warmup I/O.
+        with self._proc_lock:
+            if self._proc is not None and self._proc.poll() is None:
+                self._proc.kill()
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -129,7 +138,7 @@ class BenchmarkRunner(QThread):
             result = self._run_one(cfg["label"], cfg["overrides"])
             self.sig_run_result.emit(result)
             if not self._stop_requested and i < total - 1:
-                time.sleep(2.0)  # 轮次间隔，让显存/驱动平复
+                self._stop_event.wait(2.0)  # 轮次间隔，可立即中止
         self.sig_finished_all.emit()
 
     # ------------------------------------------------------------------
@@ -163,6 +172,11 @@ class BenchmarkRunner(QThread):
             result["error"] = f"进程启动失败: {e}"
             return result
 
+        with self._proc_lock:
+            self._proc = proc
+            if self._stop_requested and proc.poll() is None:
+                proc.kill()
+
         reader = threading.Thread(target=self._read_output,
                                   args=(proc, lines), daemon=True)
         reader.start()
@@ -174,14 +188,27 @@ class BenchmarkRunner(QThread):
                     self._measure_asr(proc, params, result)
                 else:
                     self._warmup(params)
-                    self._sample_peaks(proc, result)
-                    self._measure(proc, params, result)
+                    if not self._stop_requested:
+                        self._sample_peaks(proc, result)
+                        self._measure(proc, params, result)
             elif self._stop_requested:
                 result["status"] = "中止"
                 result["error"] = "用户中止"
         finally:
             self._shutdown(proc)
-            self._wait_port_free(params.host, params.port)
+            for request_thread in self._request_threads:
+                request_thread.join()
+            self._request_threads.clear()
+            reader.join()
+            proc.stdout.close()
+            with self._proc_lock:
+                self._proc = None
+            if not self._stop_requested:
+                self._wait_port_free(params.host, params.port)
+
+        if self._stop_requested:
+            result.update(ok=False, status="中止", error="用户中止")
+            return result
 
         if self._is_oom(lines):
             result["ok"] = False
@@ -219,7 +246,7 @@ class BenchmarkRunner(QThread):
 
     def _wait_ready(self, proc: subprocess.Popen, params: ServerParams,
                     result: dict) -> bool:
-        url = f"http://{params.host}:{params.port}/health"
+        url = params.api_base_url() + "/health"
         deadline = time.monotonic() + self.job.health_timeout
         while time.monotonic() < deadline:
             if self._stop_requested:
@@ -242,7 +269,7 @@ class BenchmarkRunner(QThread):
     def _post_completion(self, params: ServerParams, n_predict: int,
                          timeout: float) -> dict:
         """发送一次 /completion 请求，返回响应 JSON。"""
-        url = f"http://{params.host}:{params.port}/completion"
+        url = params.api_base_url() + "/completion"
         payload = json.dumps({
             "prompt": self.job.prompt,
             "n_predict": n_predict,
@@ -257,15 +284,17 @@ class BenchmarkRunner(QThread):
 
     def _warmup(self, params: ServerParams) -> None:
         """正式测量前的预热请求（结果不计入），失败仅记日志不中断。"""
-        if self.job.warmup_tokens <= 0:
+        if self._stop_requested or self.job.warmup_tokens <= 0:
             return
         self.sig_log.emit(f"[bench] 预热 {self.job.warmup_tokens} tokens …")
         try:
             self._post_completion(params, self.job.warmup_tokens,
                                   timeout=max(60.0, self.job.warmup_tokens * 2.0))
-            self.sig_log.emit("[bench] 预热完成，开始正式测量")
+            if not self._stop_requested:
+                self.sig_log.emit("[bench] 预热完成，开始正式测量")
         except Exception as e:
-            self.sig_log.emit(f"[bench] 预热请求失败（继续测量）: {e}")
+            if not self._stop_requested:
+                self.sig_log.emit(f"[bench] 预热请求失败（继续测量）: {e}")
 
     def _measure(self, proc: subprocess.Popen, params: ServerParams,
                  result: dict) -> None:
@@ -280,6 +309,7 @@ class BenchmarkRunner(QThread):
                 holder["error"] = str(e)
 
         t = threading.Thread(target=do_request, daemon=True)
+        self._request_threads.append(t)
         t.start()
         while t.is_alive():
             if self._stop_requested:
@@ -315,7 +345,7 @@ class BenchmarkRunner(QThread):
         audio_path = Path(audio_path)
         b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
         fmt = audio_path.suffix.lstrip(".").lower()
-        url = f"http://{params.host}:{params.port}/v1/chat/completions"
+        url = params.api_base_url() + "/v1/chat/completions"
         payload = json.dumps({
             "messages": [{"role": "user", "content": [
                 {"type": "input_audio",
@@ -343,7 +373,10 @@ class BenchmarkRunner(QThread):
         try:
             self._post_audio(params, files[0], timeout=120.0)
         except Exception as e:
-            self.sig_log.emit(f"[bench] ASR 预热失败（继续测量）: {e}")
+            if not self._stop_requested:
+                self.sig_log.emit(f"[bench] ASR 预热失败（继续测量）: {e}")
+        if self._stop_requested:
+            return
         self._sample_peaks(proc, result)
 
         total_audio = 0.0
@@ -371,6 +404,7 @@ class BenchmarkRunner(QThread):
                     holder["error"] = str(e)
 
             t = threading.Thread(target=do_request, daemon=True)
+            self._request_threads.append(t)
             t.start()
             while t.is_alive():
                 if self._stop_requested:
@@ -412,10 +446,7 @@ class BenchmarkRunner(QThread):
             proc.wait(timeout=6)
         except subprocess.TimeoutExpired:
             proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+            proc.wait()  # 后台等待回收，不能带着仍运行的子进程报告完成
 
     @staticmethod
     def _wait_port_free(host: str, port: int, timeout: float = 10.0) -> None:

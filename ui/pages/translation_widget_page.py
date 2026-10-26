@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout,
     QWidget,
 )
 
-from widget.api_client import DEFAULT_TRANSLATE_PROMPT
+from widget.api_client import (
+    DEFAULT_TRANSLATE_PROMPT, DEFAULT_OCR_PROMPT, IMAGE_MODE_OCR, IMAGE_MODE_TRANSLATE,
+)
 from widget.prompt_presets import (
-    active_prompt_name, normalize_prompt_presets, save_prompt_presets,
+    active_prompt_name, normalize_prompt_presets, save_prompt_presets, load_prompt_settings,
 )
 from widget.settings import WidgetSettings
 
@@ -105,6 +107,13 @@ class TranslationWidgetPage(QWidget):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("例如：中英互译")
         right_layout.addWidget(self.name_edit)
+        image_row = QHBoxLayout()
+        image_row.addWidget(QLabel("图片处理"))
+        self.image_mode_combo = QComboBox()
+        self.image_mode_combo.addItem("翻译为中文", IMAGE_MODE_TRANSLATE)
+        self.image_mode_combo.addItem("识别原文（OCR）", IMAGE_MODE_OCR)
+        image_row.addWidget(self.image_mode_combo, 1)
+        right_layout.addLayout(image_row)
         right_layout.addWidget(QLabel("系统提示词"))
         self.prompt_edit = QPlainTextEdit()
         self.prompt_edit.setPlaceholderText("输入翻译挂件使用的系统提示词…")
@@ -116,7 +125,9 @@ class TranslationWidgetPage(QWidget):
         self.btn_save = QPushButton("保存并应用")
         self.btn_save.setObjectName("primaryBtn")
         self.btn_reset.clicked.connect(
-            lambda: self.prompt_edit.setPlainText(DEFAULT_TRANSLATE_PROMPT))
+            lambda: self.prompt_edit.setPlainText(
+                DEFAULT_OCR_PROMPT if self.image_mode_combo.currentData() == IMAGE_MODE_OCR
+                else DEFAULT_TRANSLATE_PROMPT))
         self.btn_save.clicked.connect(self._save_current)
         action_row.addWidget(self.active_label)
         action_row.addStretch(1)
@@ -147,7 +158,7 @@ class TranslationWidgetPage(QWidget):
             self.btn_launch.setText("启动挂件")
 
     def reload(self) -> None:
-        data = self.settings.load()
+        data = load_prompt_settings(self.settings)
         self._presets = normalize_prompt_presets(data)
         self._active_name = active_prompt_name(data, self._presets)
         self._rebuild_list(self._active_name)
@@ -183,6 +194,8 @@ class TranslationWidgetPage(QWidget):
             return
         self.name_edit.setText(preset["name"])
         self.prompt_edit.setPlainText(preset["prompt"])
+        self.image_mode_combo.setCurrentIndex(self.image_mode_combo.findData(
+            preset.get("image_mode", IMAGE_MODE_TRANSLATE)))
         self.active_label.setText(
             "当前使用" if name == self._active_name else "")
 
@@ -197,6 +210,7 @@ class TranslationWidgetPage(QWidget):
         self.preset_list.setCurrentItem(None)
         self.name_edit.setText(name)
         self.prompt_edit.setPlainText(DEFAULT_TRANSLATE_PROMPT)
+        self.image_mode_combo.setCurrentIndex(0)
         self.active_label.clear()
         self.name_edit.setFocus()
         self.name_edit.selectAll()
@@ -217,13 +231,15 @@ class TranslationWidgetPage(QWidget):
             QMessageBox.warning(self, "无法保存", "已存在同名预设。")
             return
         replaced = False
+        updated = {"name": name, "prompt": prompt,
+                   "image_mode": self.image_mode_combo.currentData()}
         for item in self._presets:
             if item["name"] == old_name:
-                item.update({"name": name, "prompt": prompt})
+                item.update(updated)
                 replaced = True
                 break
         if not replaced:
-            self._presets.append({"name": name, "prompt": prompt})
+            self._presets.append(updated)
         self._active_name = name
         save_prompt_presets(self.settings, self._presets, self._active_name)
         self._rebuild_list(name)

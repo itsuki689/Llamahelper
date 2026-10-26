@@ -1,11 +1,8 @@
 """主窗口：侧边导航 + 页面栈 + 各模块信号接线。"""
 from __future__ import annotations
 
-import time
-import urllib.error
-import urllib.request
-
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
     QStackedWidget, QVBoxLayout, QWidget,
@@ -16,7 +13,8 @@ from config.app_config import AppConfig
 from config.presets import PresetManager
 from core.params import ServerParams
 from core.perf_parser import parse_perf_line
-from core.server_manager import STATE_RUNNING, STATE_STARTING, STATE_STOPPED, ServerManager
+from core.server_manager import STATE_STOPPED, ServerManager
+from core.server_lifecycle import ServerLifecycle
 from monitoring.gpu_monitor import GpuMonitor
 from monitoring.system_monitor import SystemMonitor
 from ui.pages.benchmark_page import BenchmarkPage
@@ -27,35 +25,25 @@ from ui.pages.presets_page import PresetsPage
 from ui.pages.translation_widget_page import TranslationWidgetPage
 
 
-class ApiHealthChecker(QThread):
-    """后台轮询 /health，确认 llama-server API 就绪，不阻塞 UI。"""
+class WindowDragLabel(QLabel):
+    """无标题栏窗口的原生拖动区域。"""
 
-    ready = Signal()
-    failed = Signal(str)
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
-    def __init__(self, host: str, port: int, timeout: float = 300.0,
-                 parent=None) -> None:
-        super().__init__(parent)
-        self._url = f"http://{host}:{port}/health"
-        self._deadline = timeout
-        self._running = True
-
-    def stop(self) -> None:
-        self._running = False
-
-    def run(self) -> None:
-        end = time.monotonic() + self._deadline
-        while self._running and time.monotonic() < end:
-            try:
-                with urllib.request.urlopen(self._url, timeout=2) as resp:
-                    if resp.status == 200:
-                        self.ready.emit()
-                        return
-            except (urllib.error.URLError, OSError):
-                pass
-            time.sleep(0.5)
-        if self._running:
-            self.failed.emit("等待 API 就绪超时")
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            window.showNormal() if window.isMaximized() else window.showMaximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +53,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("LlamaHelper — llama.cpp 调参与性能测试")
         self.resize(1180, 780)
 
@@ -72,9 +63,14 @@ class MainWindow(QMainWindow):
         self.app_config = AppConfig()
         self.preset_manager = PresetManager()
         self.server = ServerManager(self)
-        self.health_checker: ApiHealthChecker | None = None
+        self.lifecycle = ServerLifecycle(self.server, self)
         self.bench_runner: BenchmarkRunner | None = None
         self._translate_widget = None
+        self._close_requested = False
+        from PySide6.QtCore import QTimer
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(50)
+        self._close_timer.timeout.connect(self.close)
 
         # ---- UI ----
         self._build_ui()
@@ -109,10 +105,13 @@ class MainWindow(QMainWindow):
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 0, 0, 12)
         sb.setSpacing(0)
-        title = QLabel("LlamaHelper")
+
+        title = WindowDragLabel("LlamaHelper")
         title.setObjectName("appTitle")
-        subtitle = QLabel("llama.cpp 调参 · 性能测试")
+        title.setToolTip("拖动窗口 · 双击最大化/还原")
+        subtitle = WindowDragLabel("llama.cpp 调参 · 性能测试")
         subtitle.setObjectName("appSubtitle")
+        subtitle.setToolTip("拖动窗口 · 双击最大化/还原")
         sb.addWidget(title)
         sb.addWidget(subtitle)
         self.nav_buttons: list[QPushButton] = []
@@ -138,13 +137,67 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(p)
 
         lay.addWidget(sidebar)
-        lay.addWidget(self.stack, 1)
+
+        # 右侧保留 Apple 风格主体，同时补回 Windows 常用的标题栏按钮。
+        content = QWidget()
+        content.setObjectName("contentArea")
+        content_lay = QVBoxLayout(content)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
+
+        title_bar = QFrame()
+        title_bar.setObjectName("windowTitleBar")
+        title_bar.setFixedHeight(36)
+        title_bar_lay = QHBoxLayout(title_bar)
+        title_bar_lay.setContentsMargins(0, 0, 0, 0)
+        title_bar_lay.setSpacing(0)
+        drag_area = WindowDragLabel("")
+        drag_area.setObjectName("windowDragArea")
+        drag_area.setToolTip("拖动窗口 · 双击最大化/还原")
+        title_bar_lay.addWidget(drag_area, 1)
+
+        self.btn_win_minimize = QPushButton("\u2212")
+        self.btn_win_maximize = QPushButton("\u25a1")
+        self.btn_win_close = QPushButton("\u00d7")
+        for button, role, tip in (
+                (self.btn_win_minimize, "minimize", "最小化"),
+                (self.btn_win_maximize, "maximize", "最大化/还原"),
+                (self.btn_win_close, "close", "关闭")):
+            button.setObjectName("winCaptionButton")
+            button.setProperty("role", role)
+            button.setToolTip(tip)
+            button.setAccessibleName(tip)
+            button.setFixedSize(46, 35)
+            title_bar_lay.addWidget(button)
+        self.btn_win_minimize.clicked.connect(self.showMinimized)
+        self.btn_win_maximize.clicked.connect(self._toggle_maximized)
+        self.btn_win_close.clicked.connect(self.close)
+
+        content_lay.addWidget(title_bar)
+        content_lay.addWidget(self.stack, 1)
+        lay.addWidget(content, 1)
         self._switch_page(0)
 
     def _switch_page(self, idx: int) -> None:
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self.nav_buttons):
             b.setChecked(i == idx)
+
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_maximize_button()
+
+    def _sync_maximize_button(self) -> None:
+        if hasattr(self, "btn_win_maximize"):
+            self.btn_win_maximize.setText("\u2750" if self.isMaximized() else "\u25a1")
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_maximize_button()
 
     def open_translate_widget(self) -> None:
         """启动/唤起翻译挂件，跟随当前参数页的 host/port。"""
@@ -167,6 +220,9 @@ class MainWindow(QMainWindow):
             self._translate_widget.deleteLater()
             self._translate_widget = None
         self.translation_widget_page.set_widget_running(False)
+        if self._close_requested:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self.close)
 
     def open_translate_settings(self) -> None:
         """兼容旧入口：切换到翻译挂件全页设置。"""
@@ -183,11 +239,11 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         # 服务控制
         self.dashboard.start_clicked.connect(self._start_server)
-        self.dashboard.stop_clicked.connect(self.server.stop)
-        self.dashboard.restart_clicked.connect(
-            lambda: self.server.restart(self.parameters.get_params()))
+        self.dashboard.stop_clicked.connect(self.lifecycle.stop)
+        self.dashboard.restart_clicked.connect(self._restart_server)
         # 进程状态
         self.server.state_changed.connect(self._on_server_state)
+        self.lifecycle.log_line.connect(self._on_log_line)
         self.server.pid_changed.connect(self._on_pid_changed)
         self.server.start_failed.connect(self._on_start_failed)
         self.server.exited_unexpectedly.connect(self._on_unexpected_exit)
@@ -208,35 +264,27 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _start_server(self) -> None:
+        self._launch_server(restart=False)
+
+    def _restart_server(self) -> None:
+        self._launch_server(restart=True)
+
+    def _launch_server(self, *, restart: bool) -> None:
+        if self._close_requested:
+            return
         params = self.parameters.get_params()
         errors = params.validate()
         if errors:
             QMessageBox.warning(self, "无法启动", "\n".join(errors))
             return
         self.app_config.save_params(params)
-        if self.server.start(params):
-            self._start_health_check(params)
-
-    def _start_health_check(self, params: ServerParams) -> None:
-        if self.health_checker and self.health_checker.isRunning():
-            self.health_checker.stop()
-            self.health_checker.wait(2000)
-        self.health_checker = ApiHealthChecker(params.host, params.port, parent=self)
-        self.health_checker.ready.connect(self._on_api_ready)
-        self.health_checker.failed.connect(self._on_health_failed)
-        self.health_checker.start()
-
-    def _on_api_ready(self) -> None:
-        self.server.mark_running()
-        p = self.parameters.get_params()
-        self._on_log_line(f"[*] API 就绪: {p.api_base_url()}")
-
-    def _on_health_failed(self, msg: str) -> None:
-        if self.server.state == STATE_STARTING:
-            self._on_log_line(f"[!] {msg}")
+        if restart:
+            self.lifecycle.restart(params)
+        else:
+            self.lifecycle.start(params)
 
     def _on_server_state(self, state: str) -> None:
-        p = self.parameters.get_params()
+        p = self.server.launch_params or ServerParams()
         self.dashboard.set_server_state(
             state, pid=self.server.pid(),
             addr=p.web_ui_url(), api_url=p.api_base_url() + "/v1")
@@ -247,7 +295,8 @@ class MainWindow(QMainWindow):
 
     def _on_start_failed(self, msg: str) -> None:
         self._on_log_line(f"[!] 启动失败: {msg}")
-        QMessageBox.warning(self, "启动失败", msg)
+        if not self._close_requested:
+            QMessageBox.warning(self, "启动失败", msg)
 
     def _on_unexpected_exit(self, code: int) -> None:
         # 仅提示，GUI 不受影响
@@ -273,7 +322,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _start_benchmark(self, job: BenchJob) -> None:
-        if self.server.is_running():
+        if self.server.state != STATE_STOPPED:
             QMessageBox.warning(self, "Benchmark",
                                 "请先停止正在运行的 llama-server 再执行基准测试。")
             self.benchmark.set_running(False)
@@ -300,7 +349,8 @@ class MainWindow(QMainWindow):
         self.bench_runner.sig_log.connect(self._on_log_line)
         self.bench_runner.sig_run_started.connect(self.benchmark.on_run_started)
         self.bench_runner.sig_run_result.connect(self.benchmark.on_run_result)
-        self.bench_runner.sig_finished_all.connect(self._on_bench_finished)
+        # Wait for run() to return before deleting the QThread.
+        self.bench_runner.finished.connect(self._on_bench_finished)
         self.bench_runner.start()
 
     def _stop_benchmark(self) -> None:
@@ -316,20 +366,24 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
-        self.app_config.save_params(self.parameters.get_params())
+        if not self._close_requested:
+            self._close_requested = True
+            self.app_config.save_params(self.parameters.get_params())
+            self.setEnabled(False)
         if self._translate_widget is not None:
             self._translate_widget.close()
         if self.bench_runner and self.bench_runner.isRunning():
             self.bench_runner.stop()
-            self.bench_runner.wait(8000)
-        if self.health_checker and self.health_checker.isRunning():
-            self.health_checker.stop()
-            self.health_checker.wait(2000)
-        if self.server.is_running():
-            self.server.stop()
-            self.server.wait_stopped(6000)
+        self.lifecycle.shutdown()
         self.gpu_monitor.stop()
         self.sys_monitor.stop()
-        self.gpu_monitor.wait(2000)
-        self.sys_monitor.wait(2000)
+        threads_busy = any(thread.isRunning() or not thread.wait(0)
+                           for thread in self.findChildren(QThread))
+        if (self._translate_widget is not None or threads_busy
+                or self.server.state != STATE_STOPPED):
+            if not self._close_timer.isActive():
+                self._close_timer.start()
+            event.ignore()
+            return
+        self._close_timer.stop()
         event.accept()

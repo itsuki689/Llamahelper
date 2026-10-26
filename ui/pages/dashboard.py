@@ -55,6 +55,7 @@ class DashboardPage(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_restart.setEnabled(False)
         self.btn_webui.setEnabled(False)
+        self.btn_copy.setEnabled(False)
         self.btn_start.clicked.connect(self.start_clicked)
         self.btn_stop.clicked.connect(self.stop_clicked)
         self.btn_restart.clicked.connect(self.restart_clicked)
@@ -144,7 +145,8 @@ class DashboardPage(QWidget):
         running = state == "running"
         busy = state in ("starting", "stopping")
         self.btn_start.setEnabled(state == "stopped")
-        self.btn_stop.setEnabled(running or state == "starting")
+        # 停止中仍允许取消已经排队的重启；重复停止不会延长回收期限。
+        self.btn_stop.setEnabled(state in ("running", "starting", "stopping"))
         self.btn_restart.setEnabled(running)
         self.btn_webui.setEnabled(running)
         self.btn_copy.setEnabled(running)

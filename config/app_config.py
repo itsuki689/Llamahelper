@@ -26,7 +26,9 @@ class AppConfig:
     def load_params(self) -> ServerParams:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return ServerParams()
+        if not isinstance(data, dict):
             return ServerParams()
         return ServerParams.from_dict(data.get("params", {}))
 

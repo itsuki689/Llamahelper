@@ -49,9 +49,11 @@ class PresetManager:
     def load(self) -> None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
             self._presets = {str(k): dict(v) for k, v in data.items()
                              if isinstance(v, dict)}
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
             self._presets = {}
         if not self._presets:
             self._presets = {k: dict(v) for k, v in DEFAULT_PRESETS.items()}

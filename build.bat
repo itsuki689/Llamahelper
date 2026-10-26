@@ -13,6 +13,9 @@ rem A venv created from Conda keeps native dependencies in base_prefix\Library\b
 rem Add those locations so PyInstaller can bundle OpenSSL, lzma, bz2, expat and ffi.
 for /f "usebackq delims=" %%I in (`python -c "import sys; print(sys.base_prefix)"`) do set "PY_BASE=%%I"
 if exist "%PY_BASE%\Library\bin" set "PATH=%PY_BASE%\Library\bin;%PY_BASE%\DLLs;%PATH%"
+rem Prefer Windows system DLLs over same-named DLLs from unrelated developer tools.
+rem Qt uses the Windows ICU API; a third-party icuuc.dll has incompatible exports.
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%PATH%"
 set "EXTRA_BINARIES="
 if exist "%PY_BASE%\Library\bin\libcrypto-3-x64.dll" set EXTRA_BINARIES=--add-binary "%PY_BASE%\Library\bin\libcrypto-3-x64.dll;." --add-binary "%PY_BASE%\Library\bin\libssl-3-x64.dll;." --add-binary "%PY_BASE%\Library\bin\liblzma.dll;." --add-binary "%PY_BASE%\Library\bin\libbz2.dll;." --add-binary "%PY_BASE%\Library\bin\libexpat.dll;." --add-binary "%PY_BASE%\Library\bin\ffi.dll;."
 

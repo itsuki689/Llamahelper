@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import math
 import socket
-import stat
 import struct
-import sys
 import wave
 from pathlib import Path
 
@@ -98,17 +96,6 @@ def test_list_audio_files(tmp_path):
 
 
 # ---------------------------------------------------------------------
-@pytest.fixture()
-def fake_exe(tmp_path) -> Path:
-    if sys.platform == "win32":
-        pytest.skip("假服务器启动脚本依赖 POSIX shebang，Windows 上跳过")
-    launcher = tmp_path / "fake_llama_server"
-    launcher.write_text(
-        f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SERVER}" "$@"\n')
-    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
-    return launcher
-
-
 def test_benchmark_asr_one_round(fake_exe, tmp_path):
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir()

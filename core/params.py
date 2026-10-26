@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import os
 import shlex
+import math
+import subprocess
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from core.network import http_base_url
 
 # KV cache 可选类型（llama.cpp 支持值）
 KV_CACHE_TYPES = ["f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0", "iq4_nl"]
@@ -21,16 +24,61 @@ def split_extra_args(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    # posix=False 保留 Windows 路径中的反斜杠，但会保留引号，需要再剥掉
-    parts = shlex.split(text, posix=(os.name != "nt"))
-    if os.name == "nt":
-        cleaned = []
-        for p in parts:
-            if len(p) >= 2 and p[0] == p[-1] and p[0] in ("'", '"'):
-                p = p[1:-1]
-            cleaned.append(p)
-        parts = cleaned
-    return parts
+    return _split_windows_args(text) if os.name == "nt" else shlex.split(text)
+
+
+def _split_windows_args(text: str) -> list[str]:
+    """Parse Windows double quotes/backslashes, including --option="a b".
+
+    Keep legacy single-quoted whole arguments; reject unfinished quotes so
+    the parameter editor can report incomplete input instead of launching it.
+    """
+    result, token = [], []
+    quote = None
+    started = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char.isspace() and quote is None:
+            if started:
+                result.append("".join(token))
+                token, started = [], False
+            i += 1
+            continue
+        if char == "\\" and quote != "'":
+            end = i
+            while end < len(text) and text[end] == "\\":
+                end += 1
+            count = end - i
+            if end < len(text) and text[end] == '"':
+                token.append("\\" * (count // 2))
+                if count % 2:
+                    token.append('"')
+                    started, i = True, end + 1
+                    continue
+                i = end  # Even backslashes leave the following quote structural.
+                char = '"'
+            else:
+                token.append("\\" * count)
+                started, i = True, end
+                continue
+        if char == '"' and quote != "'":
+            if quote == '"' and i + 1 < len(text) and text[i + 1] == '"':
+                token.append('"')
+                i += 1
+            else:
+                quote = None if quote == '"' else '"'
+        elif char == "'" and (quote == "'" or (quote is None and not started)):
+            quote = None if quote == "'" else "'"
+        else:
+            token.append(char)
+        started = True
+        i += 1
+    if quote is not None:
+        raise ValueError("No closing quotation")
+    if started:
+        result.append("".join(token))
+    return result
 
 
 @dataclass
@@ -146,6 +194,8 @@ class ServerParams:
 
     def command_display(self) -> str:
         """用于界面展示的命令字符串（含必要引号）。"""
+        if os.name == "nt":
+            return subprocess.list2cmdline(self.build_command())
         parts = []
         for arg in self.build_command():
             if " " in arg:
@@ -155,10 +205,10 @@ class ServerParams:
         return " ".join(parts)
 
     def api_base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return http_base_url(self.host, self.port)
 
     def web_ui_url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
+        return self.api_base_url() + "/"
 
     # ------------------------------------------------------------------
     def validate(self) -> list[str]:
@@ -184,6 +234,10 @@ class ServerParams:
             errors.append(f"非法 KV Cache V 类型: {self.cache_type_v}")
         if self.rope_scaling not in ROPE_SCALING_TYPES:
             errors.append(f"非法 RoPE 缩放类型: {self.rope_scaling}")
+        try:
+            split_extra_args(self.extra_args)
+        except ValueError as exc:
+            errors.append(f"额外参数格式错误: {exc}")
         return errors
 
     # ------------------------------------------------------------------
@@ -191,9 +245,31 @@ class ServerParams:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ServerParams":
-        names = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        filtered = {k: v for k, v in (data or {}).items() if k in names}
+    def from_dict(cls, data: object) -> "ServerParams":
+        if not isinstance(data, dict):
+            return cls()
+        filtered = {}
+        for key, default in cls().to_dict().items():
+            value = data.get(key, default)
+            if type(default) is float:
+                if type(value) not in (int, float):
+                    continue
+                try:
+                    value = float(value)
+                except OverflowError:
+                    continue
+                if not math.isfinite(value):
+                    continue
+            elif type(value) is not type(default):
+                continue
+            elif type(value) is int and not -(2 ** 31) <= value < 2 ** 31:
+                continue  # Qt integer controls cannot accept larger values.
+            filtered[key] = value
+        for key, choices in (("cache_type_k", KV_CACHE_TYPES),
+                             ("cache_type_v", KV_CACHE_TYPES),
+                             ("rope_scaling", ROPE_SCALING_TYPES)):
+            if filtered.get(key) not in choices:
+                filtered.pop(key, None)
         return cls(**filtered)
 
     def preset_dict(self) -> dict:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """假 llama-server：用于测试进程管理、日志解析、API 健康检查与 Benchmark 流程。
 
 - 接受并忽略 llama-server 的全部命令行参数
@@ -9,8 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import sys
+import threading
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROMPT_TPS = 400.0
@@ -18,6 +21,11 @@ GEN_TPS = 250.0
 
 
 class Handler(BaseHTTPRequestHandler):
+    stall_post_marker = ""
+    health_marker = ""
+    health_delay = 0.0
+    ready_at = 0.0
+    never_ready = False
     def log_message(self, *args):  # 静默 HTTP 访问日志
         pass
 
@@ -27,15 +35,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A cancelled health/request client may have disconnected.
 
     def do_GET(self) -> None:
         if self.path.startswith("/health"):
-            self._json(200, {"status": "ok"})
+            if self.health_marker:
+                Path(self.health_marker).write_text("entered", encoding="utf-8")
+            time.sleep(self.health_delay)
+            ready = not self.never_ready and time.monotonic() >= self.ready_at
+            self._json(200 if ready else 503,
+                       {"status": "ok" if ready else "loading model"})
+        elif self.path == "/shutdown":
+            self._json(200, {"status": "stopping"})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
         else:
             self._json(200, {"status": "ok"})
 
     def do_POST(self) -> None:
+        if self.stall_post_marker:
+            Path(self.stall_post_marker).write_text(self.path, encoding="utf-8")
+            time.sleep(60)  # Cancellation tests stop the process to unblock.
+            return
         if self.path.startswith("/v1/chat/completions"):
             length = int(self.headers.get("Content-Length", "0"))
             try:
@@ -96,21 +119,56 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument("-m", dest="model", default="")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--stall-post", default="")
+    parser.add_argument("--startup-delay", type=float, default=0.0)
+    parser.add_argument("--ready-delay", type=float, default=0.0)
+    parser.add_argument("--health-delay", type=float, default=0.0)
+    parser.add_argument("--health-marker", default="")
+    parser.add_argument("--never-ready", action="store_true")
+    parser.add_argument("--exit-after", type=float, default=0.0)
+    parser.add_argument("--exit-code", type=int, default=17)
+    parser.add_argument("--record-launch", default="")
     args, _unknown = parser.parse_known_args()
+    Handler.stall_post_marker = args.stall_post
+    Handler.health_marker = args.health_marker
+    Handler.health_delay = args.health_delay
+    Handler.never_ready = args.never_ready
+    if args.record_launch:
+        Path(args.record_launch).write_text(json.dumps({
+            "pid": os.getpid(), "model": args.model, "port": args.port,
+            "argv": sys.argv[1:],
+        }), encoding="utf-8")
+    if args.exit_after:
+        def exit_early():
+            print(f"fake server: early exit {args.exit_code}", flush=True)
+            os._exit(args.exit_code)
+
+        timer = threading.Timer(args.exit_after, exit_early)
+        timer.daemon = True
+        timer.start()
 
     print("llama_model_loader: loaded meta data with 42 key-value pairs "
           "and 363 tensors from fake-model.gguf", flush=True)
     print("llama_perf_context_print:        load time =    1523.45 ms", flush=True)
+    time.sleep(args.startup_delay)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
+    Handler.ready_at = time.monotonic() + args.ready_delay
     print(f"srv    server_listen: listening on {args.host}:{args.port}", flush=True)
     print("srv    update_slots: all slots are idle", flush=True)
+    # POSIX terminate and the test-only /shutdown endpoint both exit cleanly.
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(
+        target=server.shutdown, daemon=True).start())
     try:
-        server.serve_forever()
+        server.serve_forever(poll_interval=0.05)
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()
+        print("fake server: stopped", flush=True)
 
 
 if __name__ == "__main__":
