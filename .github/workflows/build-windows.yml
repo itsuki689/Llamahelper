@@ -3,9 +3,13 @@ name: Build Windows EXE
 on:
   push:
     branches: [main, 'codex/**']
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -48,7 +52,7 @@ jobs:
       - name: Build single-file exe with PyInstaller
         timeout-minutes: 15
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name LlamaHelper --icon assets/icon.ico --add-data "assets;assets" --collect-submodules psutil main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name LlamaHelper --icon assets/icon.ico --add-data "assets;assets" --add-data "LICENSE;." --collect-submodules psutil main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -56,3 +60,82 @@ jobs:
           name: LlamaHelper-windows
           path: dist/LlamaHelper.exe
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout release sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a version tag on main with release notes
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test -s "docs/releases/$RELEASE_TAG.md"
+
+      - name: Download tested EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: LlamaHelper-windows
+          path: release-assets
+
+      - name: Download matching Windows test report
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-test-results
+          path: release-assets
+
+      - name: Prepare license, checksums and verification details
+        shell: bash
+        run: |
+          python tools/check_lifecycle_results.py release-assets/windows.xml
+          cp LICENSE release-assets/LICENSE.txt
+          test -s release-assets/LlamaHelper.exe
+          cd release-assets
+          sha256sum LlamaHelper.exe LICENSE.txt windows.xml > SHA256SUMS.txt
+          cd ..
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          cases = list(ET.parse('release-assets/windows.xml').iter('testcase'))
+          counts = {outcome: sum(case.find(outcome) is not None for case in cases)
+                    for outcome in ('failure', 'error', 'skipped')}
+          if counts['failure'] or counts['error']:
+              raise SystemExit('Refusing to publish unsuccessful test results')
+          passed = len(cases) - sum(counts.values())
+          notes = Path(f"docs/releases/{os.environ['RELEASE_TAG']}.md").read_text(encoding='utf-8')
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          notes += (f"\n## 本次发布验证\n\n提交：`{os.environ['GITHUB_SHA']}`\n\n"
+                    f"Windows 测试：{passed} 通过、{counts['skipped']} 跳过，"
+                    f"生命周期覆盖检查与 PyInstaller 打包通过。\n\n[对应 CI]({run_url})\n")
+          Path('release-notes.md').write_text(notes, encoding='utf-8')
+          PY
+
+      - name: Upload all assets before publishing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > is-draft.txt; then
+            test "$(cat is-draft.txt)" = true
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --verify-tag --draft \
+              --title "LlamaHelper $RELEASE_TAG" --notes-file release-notes.md
+          fi
+          gh release edit "$RELEASE_TAG" --notes-file release-notes.md --draft=false --latest

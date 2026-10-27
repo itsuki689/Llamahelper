@@ -5,6 +5,12 @@ Windows 11 上的 **llama.cpp GUI 调参与性能测试工具**：llama-server.e
 
 深色 Apple 风格桌面界面（PySide6），可打包为单个 exe。
 
+## 下载
+
+从 [GitHub Releases](https://github.com/itsuki689/Llamahelper/releases/latest)
+下载 `LlamaHelper.exe`。无需安装 Python；llama-server、模型及其运行时需另行准备。
+每个版本同时提供 MIT 许可证、Windows 测试报告与 `SHA256SUMS.txt` 校验值。
+
 ## 功能
 
 - **Dashboard**：GPU 利用率 / 显存 / 温度 / 功耗 / 频率，CPU / RAM，llama-server 进程
@@ -111,3 +117,8 @@ build.bat              PyInstaller 一键打包
 - Benchmark 的 tok/s 取自 llama-server `/completion` 响应中的 `timings`
   字段（比解析日志更可靠）；Dashboard 的 tok/s 实时解析服务日志中的
   `prompt eval time` / `eval time` 行。
+
+## 许可证
+
+LlamaHelper 项目代码采用 [MIT 许可证](LICENSE)。第三方依赖、llama-server
+及模型各自遵循其原有许可证。

@@ -29,6 +29,7 @@ pyinstaller --noconfirm --clean ^
     --name LlamaHelper ^
     --icon assets/icon.ico ^
     --add-data "assets;assets" ^
+    --add-data "LICENSE;." ^
     %EXTRA_BINARIES% ^
     main.py
 
